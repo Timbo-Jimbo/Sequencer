@@ -56,7 +56,8 @@ public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigu
     {
         return new Playback(context)
         {
-            Binding = context.PropertyBindings.Bindings[Property],
+            BindingCollection = context.PropertyBindings,
+            Property = Property,
             Ease = Ease,
             StartMode = StartMode,
             EndMode = EndMode,
@@ -69,7 +70,8 @@ public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigu
 
     public class Playback : SegmentPlayback
     {
-        public IPropertyBinding Binding;
+        public PropertyBindingCollection BindingCollection;
+        public BindableProperty Property;
         public EaseType Ease;
         public EasedStartMode StartMode;
         public EasedEndMode EndMode;
@@ -91,8 +93,8 @@ public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigu
         {
             if (EndMode == EasedEndMode.EndAtInitial)
             {
-                var readResult = Binding.Read();
-                _endValue = readResult.Success ? readResult.Value : EndValue;
+                var readResult = BindingCollection.TryRead(Property, out var readValue);
+                _endValue = readResult ? readValue : EndValue;
                 _endValueInitialized = true;
             }
 
@@ -105,7 +107,7 @@ public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigu
                     if (playback == this)
                         break;
 
-                    if (playback is Playback p && p.Binding == Binding)
+                    if (playback is Playback p && p.Property == Property)
                     {
                         isFirst = false;
                         break;
@@ -116,7 +118,7 @@ public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigu
                 {
                     // if so, we need to ensure the start value is correct from the outset
                     //otherwise we will get a pop at the start of this segment.
-                    Binding.Write(StartValue);
+                    BindingCollection.TryWrite(Property, StartValue);
                 }
             }
         }
@@ -131,8 +133,8 @@ public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigu
                         _startValue = StartValue;
                         break;
                     case EasedStartMode.StartFromCurrent:
-                        var readResult = Binding.Read();
-                        _startValue = readResult.Success ? readResult.Value : StartValue;
+                        var readSuccess = BindingCollection.TryRead(Property, out var readValue);
+                        _startValue = readSuccess ? readValue : StartValue;
                         break;
                 }
 
@@ -166,12 +168,13 @@ public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigu
                 easedT,
                 Interpolation,
                 DiscreteValueSelection);
-            Binding.Write(resultValue);
+            BindingCollection.TryWrite(Property, resultValue);
         }
 
         public override void OnExit(in PlaybackBoundaryContext context)
         {
-            Binding.Write(_endValue);
+            BindingCollection.TryWrite(Property, _endValue);
+
         }
     }
 }

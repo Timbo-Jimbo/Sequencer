@@ -74,7 +74,8 @@ public class SequenceInstance : IDisposable
         if (_isDisposed)
             return;
 
-        _runtime.Tick(dt);
+        using(BulkWriteAll.Scope(this))
+            _runtime.Tick(dt);
     }
 
     public void Pause()
@@ -82,7 +83,8 @@ public class SequenceInstance : IDisposable
         if (_isDisposed)
             return;
 
-        _runtime.Pause();
+        using(BulkWriteAll.Scope(this))
+            _runtime.Pause();
     }
 
     public void Resume()
@@ -90,7 +92,8 @@ public class SequenceInstance : IDisposable
         if (_isDisposed)
             return;
 
-        _runtime.Resume();
+        using(BulkWriteAll.Scope(this))
+            _runtime.Resume();
     }
 
     public void Stop()
@@ -98,7 +101,8 @@ public class SequenceInstance : IDisposable
         if (_isDisposed)
             return;
 
-        _runtime.Stop();
+        using(BulkWriteAll.Scope(this))
+            _runtime.Stop();
     }
 
     public void Scrub(float absolutePosition)
@@ -106,7 +110,8 @@ public class SequenceInstance : IDisposable
         if (_isDisposed)
             return;
 
-        _runtime.Scrub(absolutePosition);
+        using(BulkWriteAll.Scope(this))
+            _runtime.Scrub(absolutePosition);
     }
 
     private void CollectBindingsAndRestoreValues(SegmentPlan rootPlan)
@@ -222,28 +227,37 @@ public class SequenceInstance : IDisposable
 
     private void SetupAllPlaybacks()
     {
-        var setupContext = new PlaybackSetupContext(this, _isPreview);
-        foreach (var playback in _playbacks)
-            playback.Setup(in setupContext);
+        using(BulkWriteAll.Scope(this))
+        {
+            var setupContext = new PlaybackSetupContext(this, _isPreview);
+            foreach (var playback in _playbacks)
+                playback.Setup(in setupContext);
+        }
     }
 
     private void CleanUpAllPlaybacks()
     {
-        var setupContext = new PlaybackSetupContext(this, _isPreview);
-        foreach (var playback in _playbacks)
-            playback.CleanUp(in setupContext);
+        using(BulkWriteAll.Scope(this))
+        {
+            var setupContext = new PlaybackSetupContext(this, _isPreview);
+            foreach (var playback in _playbacks)
+                playback.CleanUp(in setupContext);
+        }
     }
 
     private void RestoreInitialValues()
     {
-        foreach (var kvp in _restoreValues)
+        using(BulkWriteAll.Scope(this))
         {
-            var propertyBindingCollection = kvp.Key;
-            var restoreValuesForCollection = kvp.Value;
-
-            foreach (var restoreKvp in restoreValuesForCollection)
+            foreach (var kvp in _restoreValues)
             {
-                propertyBindingCollection.TryWrite(restoreKvp.Key, restoreKvp.Value);
+                var propertyBindingCollection = kvp.Key;
+                var restoreValuesForCollection = kvp.Value;
+
+                foreach (var restoreKvp in restoreValuesForCollection)
+                {
+                    propertyBindingCollection.TryWrite(restoreKvp.Key, restoreKvp.Value);
+                }
             }
         }
     }
@@ -482,6 +496,30 @@ public class SequenceInstance : IDisposable
             _setupAllPlaybacks();
             _nextKeyframeIndex = 0;
             _playhead = 0f;
+        }
+    }
+
+    private struct BulkWriteAll : IDisposable
+    {
+        private readonly SequenceInstance _instance;
+
+        private BulkWriteAll(SequenceInstance owner)
+        {
+            _instance = owner;
+
+            foreach (var (_, collection) in _instance._propertyBindingCollections)
+                collection.StartBulkWrite();
+        }
+
+        public static BulkWriteAll Scope(SequenceInstance owner)
+        {
+            return new BulkWriteAll(owner);
+        }
+
+        public void Dispose()
+        {
+            foreach (var (_, collection) in _instance._propertyBindingCollections)
+                collection.EndBulkWrite();
         }
     }
 }

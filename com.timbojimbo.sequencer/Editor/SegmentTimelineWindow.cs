@@ -874,9 +874,11 @@ public sealed class SegmentTimelineWindow : EditorWindow
         if (_recordCollection == null || _recordSnapshotValues.Count == 0)
             return;
 
-        using var writer = _recordCollection.StartBulkWriteScope();
-        foreach (var pair in _recordSnapshotValues)
-            writer.TryWrite(pair.Key, pair.Value);
+        using(_recordCollection.BulkWriteScope())
+        {
+            foreach (var pair in _recordSnapshotValues)
+                _recordCollection.TryWrite(pair.Key, pair.Value);
+        }
     }
 
     private void UpdateRecordLabel()

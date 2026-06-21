@@ -1,0 +1,17 @@
+{
+    "name": "TimboJimbo.Sequencer.Runtime",
+    "rootNamespace": "TimboJimbo.Sequencer",
+    "references": [
+        "TimboJimbo.Core.Runtime",
+        "TimboJimbo.PropertyBindings.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

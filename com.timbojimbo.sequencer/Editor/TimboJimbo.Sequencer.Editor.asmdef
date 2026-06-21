@@ -1,0 +1,22 @@
+{
+    "name": "TimboJimboEditor.Sequencer",
+    "rootNamespace": "TimboJimboEditor.Sequencer",
+    "references": [
+        "TimboJimbo.Core.Runtime",
+        "TimboJimboEditor.Core",
+        "TimboJimbo.PropertyBindings.Runtime",
+        "TimboJimboEditor.PropertyBindings",
+        "TimboJimbo.Sequencer.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -7,7 +7,7 @@
 	"description": "",
 	"dependencies": {
 		"com.timbojimbo.core": "0.5.1",
-		"com.timbojimbo.propertybindings": "0.6.0"
+		"com.timbojimbo.propertybindings": "0.6.1"
 	},
 	"author": {
 		"name": "Timbo Jimbo",

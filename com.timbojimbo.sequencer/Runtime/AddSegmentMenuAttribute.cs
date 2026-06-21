@@ -1,12 +1,15 @@
 using System;
 
-[AttributeUsage(AttributeTargets.Class, Inherited = false)]
-public sealed class AddSegmentMenuAttribute : Attribute
+namespace TimboJimbo.Sequencer
 {
-    public string MenuName { get; }
-
-    public AddSegmentMenuAttribute(string menuName)
+    [AttributeUsage(AttributeTargets.Class, Inherited = false)]
+    public sealed class AddSegmentMenuAttribute : Attribute
     {
-        MenuName = menuName;
+        public string MenuName { get; }
+
+        public AddSegmentMenuAttribute(string menuName)
+        {
+            MenuName = menuName;
+        }
     }
 }

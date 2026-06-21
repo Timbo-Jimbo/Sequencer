@@ -3,40 +3,43 @@ using System.Collections.Generic;
 using JetBrains.Annotations;
 using UnityEngine;
 
-[Serializable]
-[AddSegmentMenu("")]
-public class Sequence : Segment, IStartTimeConfigurable
+namespace TimboJimbo.Sequencer.Segments
 {
-    public float StartTime;
-    public GameObject BindingRoot;
-
-    [SerializeReference]
-    public List<Segment> Segments = new List<Segment>();
-
-    public void SetStartTime(float startTime) => StartTime = startTime;
-    public float GetStartTime() => StartTime;
-
-    public override SegmentPlan GetPlan([CanBeNull] SegmentPlan parent)
+    [Serializable]
+    [AddSegmentMenu("")]
+    public class Sequence : Segment, IStartTimeConfigurable
     {
-        var plan = new SegmentPlan(this, parent)
+        public float StartTime;
+        public GameObject BindingRoot;
+
+        [SerializeReference]
+        public List<Segment> Segments = new List<Segment>();
+
+        public void SetStartTime(float startTime) => StartTime = startTime;
+        public float GetStartTime() => StartTime;
+
+        public override SegmentPlan GetPlan([CanBeNull] SegmentPlan parent)
         {
-            Bindings = { BindingsRoot = BindingRoot },
-            Timing = { RelativeStartTime = StartTime }
-        };
+            var plan = new SegmentPlan(this, parent)
+            {
+                Bindings = { BindingsRoot = BindingRoot },
+                Timing = { RelativeStartTime = StartTime }
+            };
 
-        var maxRelativeEndTime = 0f;
+            var maxRelativeEndTime = 0f;
 
-        foreach (var child in Segments)
-        {
-            var childPlan = child.GetPlan(plan);
+            foreach (var child in Segments)
+            {
+                var childPlan = child.GetPlan(plan);
 
-            var childRelativeEndTime = childPlan.Timing.RelativeEndTime;
-            if (childRelativeEndTime > maxRelativeEndTime)
-                maxRelativeEndTime = childRelativeEndTime;
+                var childRelativeEndTime = childPlan.Timing.RelativeEndTime;
+                if (childRelativeEndTime > maxRelativeEndTime)
+                    maxRelativeEndTime = childRelativeEndTime;
+            }
+
+            plan.Timing.RelativeDuration = maxRelativeEndTime;
+
+            return plan;
         }
-
-        plan.Timing.RelativeDuration = maxRelativeEndTime;
-
-        return plan;
     }
 }

@@ -1,35 +1,39 @@
+using TimboJimbo.Sequencer.Segments;
 using UnityEngine;
 
-public class SequenceProvider : MonoBehaviour
+namespace TimboJimbo.Sequencer
 {
-    public Sequence Sequence = new Sequence();
-
-    public SegmentPlan GetPlan(SegmentPlan parent = null)
+    public class SequenceProvider : MonoBehaviour
     {
-        EnsureSequence();
-        return Sequence.GetPlan(parent);
-    }
+        public Sequence Sequence = new Sequence();
 
-    public SequenceInstance CreateInstance(bool isPreview = false, bool restoreValuesOnDispose = true)
-    {
-        EnsureSequence();
-        return SequenceInstance.Create(Sequence, isPreview, restoreValuesOnDispose);
-    }
+        public SegmentPlan GetPlan(SegmentPlan parent = null)
+        {
+            EnsureSequence();
+            return Sequence.GetPlan(parent);
+        }
 
-    private void Reset()
-    {
-        EnsureSequence();
-    }
+        public SequenceInstance CreateInstance(bool isPreview = false, bool restoreValuesOnDispose = true)
+        {
+            EnsureSequence();
+            return SequenceInstance.Create(Sequence, isPreview, restoreValuesOnDispose);
+        }
 
-    private void OnValidate()
-    {
-        EnsureSequence();
-    }
+        private void Reset()
+        {
+            EnsureSequence();
+        }
 
-    private void EnsureSequence()
-    {
-        Sequence ??= new Sequence();
-        if (Sequence.BindingRoot == null)
-            Sequence.BindingRoot = gameObject;
+        private void OnValidate()
+        {
+            EnsureSequence();
+        }
+
+        private void EnsureSequence()
+        {
+            Sequence ??= new Sequence();
+            if (Sequence.BindingRoot == null)
+                Sequence.BindingRoot = gameObject;
+        }
     }
 }

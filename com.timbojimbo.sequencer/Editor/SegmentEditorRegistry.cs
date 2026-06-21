@@ -1,54 +1,58 @@
 using System;
 using System.Collections.Generic;
+using TimboJimbo.Sequencer;
 using UnityEditor;
 
-public static class SegmentEditorRegistry
+namespace TimboJimboEditor.Sequencer
 {
-    private static Dictionary<Type, Type> _editorTypes;
-
-    private static void EnsureRegistry()
+    public static class SegmentEditorRegistry
     {
-        if (_editorTypes != null)
-            return;
+        private static Dictionary<Type, Type> _editorTypes;
 
-        _editorTypes = new Dictionary<Type, Type>();
-        var foundTypes = TypeCache.GetTypesWithAttribute<CustomSegmentEditorAttribute>();
-        foreach (var editorType in foundTypes)
+        private static void EnsureRegistry()
         {
-            if (editorType.IsAbstract || !typeof(SegmentEditor).IsAssignableFrom(editorType))
-                continue;
+            if (_editorTypes != null)
+                return;
 
-            var attributes = (CustomSegmentEditorAttribute[])editorType.GetCustomAttributes(typeof(CustomSegmentEditorAttribute), false);
-            if (attributes.Length > 0)
+            _editorTypes = new Dictionary<Type, Type>();
+            var foundTypes = TypeCache.GetTypesWithAttribute<CustomSegmentEditorAttribute>();
+            foreach (var editorType in foundTypes)
             {
-                var inspectedType = attributes[0].InspectedType;
-                _editorTypes[inspectedType] = editorType;
+                if (editorType.IsAbstract || !typeof(SegmentEditor).IsAssignableFrom(editorType))
+                    continue;
+
+                var attributes = (CustomSegmentEditorAttribute[])editorType.GetCustomAttributes(typeof(CustomSegmentEditorAttribute), false);
+                if (attributes.Length > 0)
+                {
+                    var inspectedType = attributes[0].InspectedType;
+                    _editorTypes[inspectedType] = editorType;
+                }
             }
         }
-    }
 
-    public static SegmentEditor GetEditor(Segment segment)
-    {
-        if (segment == null)
+        public static SegmentEditor GetEditor(Segment segment)
+        {
+            if (segment == null)
+                return new SegmentEditor();
+
+            return GetEditorByType(segment.GetType());
+        }
+
+        public static SegmentEditor GetEditorByType(Type segmentType)
+        {
+            EnsureRegistry();
+            if (_editorTypes.TryGetValue(segmentType, out var editorType))
+            {
+                try
+                {
+                    return (SegmentEditor)Activator.CreateInstance(editorType);
+                }
+                catch (Exception e)
+                {
+                    UnityEngine.Debug.LogError($"Failed to instantiate SegmentEditor {editorType.Name}: {e.Message}");
+                }
+            }
             return new SegmentEditor();
-
-        return GetEditorByType(segment.GetType());
-    }
-
-    public static SegmentEditor GetEditorByType(Type segmentType)
-    {
-        EnsureRegistry();
-        if (_editorTypes.TryGetValue(segmentType, out var editorType))
-        {
-            try
-            {
-                return (SegmentEditor)Activator.CreateInstance(editorType);
-            }
-            catch (Exception e)
-            {
-                UnityEngine.Debug.LogError($"Failed to instantiate SegmentEditor {editorType.Name}: {e.Message}");
-            }
         }
-        return new SegmentEditor();
     }
 }

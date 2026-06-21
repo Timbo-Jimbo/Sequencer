@@ -1,25 +1,29 @@
 using System;
 using TimboJimbo.PropertyBindings;
+using TimboJimbo.Sequencer;
 using UnityEngine;
 
-[AttributeUsage(AttributeTargets.Class, Inherited = false)]
-public sealed class CustomSegmentRecorderAttribute : Attribute
+namespace TimboJimboEditor.Sequencer
 {
-    public Type InspectedType { get; }
-
-    public CustomSegmentRecorderAttribute(Type inspectedType)
+    [AttributeUsage(AttributeTargets.Class, Inherited = false)]
+    public sealed class CustomSegmentRecorderAttribute : Attribute
     {
-        InspectedType = inspectedType;
+        public Type InspectedType { get; }
+
+        public CustomSegmentRecorderAttribute(Type inspectedType)
+        {
+            InspectedType = inspectedType;
+        }
     }
-}
 
-public abstract class SegmentRecorder
-{
-    public virtual int Priority => 0;
+    public abstract class SegmentRecorder
+    {
+        public virtual int Priority => 0;
 
-    public virtual bool CanConsume(Segment segment, BindableProperty property, float time) => false;
-    public virtual void Consume(Segment segment, BindableProperty property, ValueContainer value, float time) { }
+        public virtual bool CanConsume(Segment segment, BindableProperty property, float time) => false;
+        public virtual void Consume(Segment segment, BindableProperty property, ValueContainer value, float time) { }
 
-    public virtual bool CanCreateFor(BindableProperty property) => false;
-    public virtual Segment CreateSegment(BindableProperty property, ValueContainer value, float time) => null;
+        public virtual bool CanCreateFor(BindableProperty property) => false;
+        public virtual Segment CreateSegment(BindableProperty property, ValueContainer value, float time) => null;
+    }
 }

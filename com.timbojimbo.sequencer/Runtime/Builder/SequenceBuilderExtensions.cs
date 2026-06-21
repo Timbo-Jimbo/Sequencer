@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using TimboJimbo.Sequencer;
+using TimboJimbo.Sequencer.Builder;
 
 public static class SequenceBuilderExtensions
 {

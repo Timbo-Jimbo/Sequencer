@@ -4,89 +4,92 @@ using JetBrains.Annotations;
 using TimboJimbo.PropertyBindings;
 using UnityEngine;
 
-public class SegmentPlan
+namespace TimboJimbo.Sequencer
 {
-    public Segment Segment;
-    public SegmentPlan Parent;
-    public List<SegmentPlan> Children;
-    public SegmentTimingPlan Timing;
-    public SegmentBindingsPlan Bindings;
-    public bool CanAdjustStartTime => Segment is IStartTimeConfigurable;
-    public bool CanAdjustDuration => Segment is IDurationConfigurable;
-
-    public SegmentPlan(
-        Segment segment,
-        SegmentPlan parent = null
-    )
+    public class SegmentPlan
     {
-        Segment = segment;
-        Timing = new SegmentTimingPlan(this);
-        Bindings = new SegmentBindingsPlan(this);
+        public Segment Segment;
+        public SegmentPlan Parent;
+        public List<SegmentPlan> Children;
+        public SegmentTimingPlan Timing;
+        public SegmentBindingsPlan Bindings;
+        public bool CanAdjustStartTime => Segment is IStartTimeConfigurable;
+        public bool CanAdjustDuration => Segment is IDurationConfigurable;
 
-        Parent = parent;
-        Children = new List<SegmentPlan>();
-        Parent?.Children.Add(this);
+        public SegmentPlan(
+            Segment segment,
+            SegmentPlan parent = null
+        )
+        {
+            Segment = segment;
+            Timing = new SegmentTimingPlan(this);
+            Bindings = new SegmentBindingsPlan(this);
+
+            Parent = parent;
+            Children = new List<SegmentPlan>();
+            Parent?.Children.Add(this);
+        }
     }
-}
 
-public class SegmentBindingsPlan
-{
-    public SegmentPlan Plan;
-    public GameObject BindingsRoot
+    public class SegmentBindingsPlan
     {
-        get => _bindingRoot != null ? _bindingRoot : Plan.Parent?.Bindings.BindingsRoot;
-        set => _bindingRoot = value;
+        public SegmentPlan Plan;
+        public GameObject BindingsRoot
+        {
+            get => _bindingRoot != null ? _bindingRoot : Plan.Parent?.Bindings.BindingsRoot;
+            set => _bindingRoot = value;
+        }
+        public HashSet<BindableProperty> Properties;
+
+        private GameObject _bindingRoot;
+
+        public SegmentBindingsPlan(SegmentPlan plan)
+        {
+            Plan = plan;
+            Properties = new HashSet<BindableProperty>();
+        }
     }
-    public HashSet<BindableProperty> Properties;
 
-    private GameObject _bindingRoot;
-
-    public SegmentBindingsPlan(SegmentPlan plan)
+    public class SegmentTimingPlan
     {
-        Plan = plan;
-        Properties = new HashSet<BindableProperty>();
+        public SegmentPlan Plan;
+        public float RelativeStartTime;
+        public float RelativeDuration;
+        public float RelativeEndTime => RelativeStartTime + RelativeDuration;
+
+        public float AbsoluteStartTime => Plan.Parent != null
+            ? Plan.Parent.Timing.AbsoluteStartTime + RelativeStartTime
+            : RelativeStartTime;
+
+        public float AbsoluteDuration => RelativeDuration;
+        public float AbsoluteEndTime => AbsoluteStartTime + AbsoluteDuration;
+
+        public SegmentTimingPlan(SegmentPlan plan)
+        {
+            Plan = plan;
+        }
     }
-}
 
-public class SegmentTimingPlan
-{
-    public SegmentPlan Plan;
-    public float RelativeStartTime;
-    public float RelativeDuration;
-    public float RelativeEndTime => RelativeStartTime + RelativeDuration;
-
-    public float AbsoluteStartTime => Plan.Parent != null
-        ? Plan.Parent.Timing.AbsoluteStartTime + RelativeStartTime
-        : RelativeStartTime;
-
-    public float AbsoluteDuration => RelativeDuration;
-    public float AbsoluteEndTime => AbsoluteStartTime + AbsoluteDuration;
-
-    public SegmentTimingPlan(SegmentPlan plan)
+    public interface IDurationConfigurable
     {
-        Plan = plan;
+        void SetDuration(float duration);
+        float GetDuration();
     }
-}
 
-public interface IDurationConfigurable
-{
-    void SetDuration(float duration);
-    float GetDuration();
-}
+    public interface IStartTimeConfigurable
+    {
+        void SetStartTime(float startTime);
+        float GetStartTime();
+    }
 
-public interface IStartTimeConfigurable
-{
-    void SetStartTime(float startTime);
-    float GetStartTime();
-}
+    public interface IPlaybackBuilder
+    {
+        SegmentPlayback BuildPlayback(in PlaybackBuildContext context);
+    }
 
-public interface IPlaybackBuilder
-{
-    SegmentPlayback BuildPlayback(in PlaybackBuildContext context);
-}
-
-[Serializable]
-public abstract class Segment
-{
-    public abstract SegmentPlan GetPlan([CanBeNull] SegmentPlan parent);
+    [Serializable]
+    public abstract class Segment
+    {
+        public abstract SegmentPlan GetPlan([CanBeNull] SegmentPlan parent);
+    }
 }

@@ -18,10 +18,8 @@ namespace TimboJimboEditor.Sequencer
         private SequenceProvider _provider;
         private SegmentPlan _rootPlan;
         private SegmentPlan _activeEditRoot;
-        private SegmentPlan _selected;
 
         private Label _providerLabel;
-        private Label _infoLabel;
         private HelpBox _diagnostic;
         private SegmentTimelineCanvas _canvas;
         private VisualElement _inspectorHost;
@@ -50,11 +48,9 @@ namespace TimboJimboEditor.Sequencer
         }
 
         private readonly Dictionary<BindableProperty, RecordedEdit> _recordedEdits = new();
-
-        private static IReadOnlyList<Type> _addableTypesCache;
-
         private bool IsPreviewing => _previewSession != null;
         private bool IsRecording => _editTracker != null;
+        private IReadOnlyList<SegmentPlan> SelectedSegments => _canvas?.SelectedPlans ?? Array.Empty<SegmentPlan>();
 
         [MenuItem("Window/Segment Timeline")]
         public static void OpenFromMenu() => Open(Selection.activeGameObject != null
@@ -189,7 +185,7 @@ namespace TimboJimboEditor.Sequencer
 
             var leftPane = new VisualElement { style = { flexGrow = 1f } };
             _canvas = new SegmentTimelineCanvas();
-            _canvas.SegmentSelected += OnSegmentSelected;
+            _canvas.SelectionChanged += OnCanvasSelectionChanged;
             _canvas.TimeAdjustmentCommitted += OnTimeAdjustmentCommitted;
             _canvas.DeleteRequested += OnDeleteRequested;
             _canvas.AddRequested += OnAddRequested;
@@ -217,17 +213,6 @@ namespace TimboJimboEditor.Sequencer
                 pickingMode = PickingMode.Ignore,
             };
             _canvas.Add(_canvasBorderOverlay);
-
-            _infoLabel = new Label
-            {
-                style =
-                {
-                    marginLeft = 8,
-                    marginBottom = 6,
-                    color = new Color(0.7f, 0.7f, 0.7f),
-                }
-            };
-            leftPane.Add(_infoLabel);
 
             split.Add(leftPane);
 
@@ -273,7 +258,6 @@ namespace TimboJimboEditor.Sequencer
             _serializedProvider?.Dispose();
             _serializedProvider = _provider != null ? new SerializedObject(_provider) : null;
 
-            _selected = null;
             _activeEditRoot = null;
             _displayTime = 0f;
             _playToggle?.SetValueWithoutNotify(false);
@@ -287,8 +271,6 @@ namespace TimboJimboEditor.Sequencer
             {
                 _rootPlan = null;
                 _activeEditRoot = null;
-                _selected = null;
-                _infoLabel.text = "Select a SequenceSegmentProvider to begin.";
                 _canvas.SetView(null, null, null);
                 _canvas.SetPreviewActive(false);
                 _canvas.SetTime(_displayTime);
@@ -303,7 +285,6 @@ namespace TimboJimboEditor.Sequencer
             if (_rootPlan?.Segment is not Sequence)
             {
                 _activeEditRoot = null;
-                _selected = null;
                 _canvas.SetView(null, null, null);
                 _canvas.SetPreviewActive(false);
                 _canvas.SetTime(_displayTime);
@@ -316,36 +297,40 @@ namespace TimboJimboEditor.Sequencer
             _activeEditRoot = _rootPlan;
 
             var activeLayer = _activeEditRoot.Children;
-            var rebuildInspector = false;
+            List<SegmentPlan> selectedPlans = null;
 
-            if (preserveSelection && _selected != null)
+            if (preserveSelection)
             {
-                bool stillExists = false;
-                for (int i = 0; i < activeLayer.Count; i++)
+                var currentSelection = SelectedSegments;
+                if (currentSelection.Count > 0)
                 {
-                    if (ReferenceEquals(activeLayer[i].Segment, _selected.Segment))
+                    selectedPlans = new List<SegmentPlan>(currentSelection.Count);
+                    for (int i = 0; i < currentSelection.Count; i++)
                     {
-                        _selected = activeLayer[i];
-                        stillExists = true;
-                        break;
+                        var selectedSegment = currentSelection[i]?.Segment;
+                        if (selectedSegment == null)
+                            continue;
+
+                        for (int j = 0; j < activeLayer.Count; j++)
+                        {
+                            if (ReferenceEquals(activeLayer[j].Segment, selectedSegment))
+                            {
+                                selectedPlans.Add(activeLayer[j]);
+                                break;
+                            }
+                        }
                     }
-                }
 
-                if (!stillExists)
-                {
-                    _selected = null;
-                    rebuildInspector = true;
+                    if (selectedPlans.Count == 0 && activeLayer.Count > 0)
+                        selectedPlans.Add(activeLayer[0]);
                 }
             }
-            else if (!preserveSelection)
+            else if (activeLayer.Count > 0)
             {
-                _selected = activeLayer.Count > 0 ? activeLayer[0] : null;
-                rebuildInspector = true;
+                selectedPlans = new List<SegmentPlan>(1) { activeLayer[0] };
             }
 
-            _canvas.SetView(_activeEditRoot, activeLayer, _selected);
-            _infoLabel.text =
-                "Editing one layer only: direct children of opened SequenceSegment. Nested SequenceSegment content is preview-only.";
+            _canvas.SetView(_activeEditRoot, activeLayer, selectedPlans);
 
             if (IsPreviewing)
             {
@@ -360,16 +345,23 @@ namespace TimboJimboEditor.Sequencer
             _canvas.SetTime(_displayTime);
             UpdatePreviewVisuals();
             UpdateTimeUi();
-            
-            if (rebuildInspector)
-                RebuildInspector();
-        }
 
-        private void OnSegmentSelected(SegmentPlan plan)
-        {
-            _selected = plan;
             RebuildInspector();
         }
+
+        private void OnCanvasSelectionChanged(IReadOnlyList<SegmentPlan> selected)
+        {
+            RebuildInspector();
+        }
+
+        private void SelectSingle(SegmentPlan plan)
+        {
+            _canvas?.SetSelection(plan != null
+                ? new[] { plan }
+                : Array.Empty<SegmentPlan>());
+            RebuildInspector();
+        }
+
 
         private void RebuildInspector()
         {
@@ -381,13 +373,23 @@ namespace TimboJimboEditor.Sequencer
                 return;
             }
 
-            if (_selected == null)
+            var selectedSegments = SelectedSegments;
+
+            if (selectedSegments.Count == 0)
             {
                 _inspectorHost.Add(new HelpBox("Select a segment block to inspect.", HelpBoxMessageType.Info));
                 return;
             }
 
-            string selectedPath = SegmentLocator.FindPath(_provider.Sequence, _selected.Segment, "Sequence");
+            if (selectedSegments.Count > 1)
+            {
+                _inspectorHost.Add(new HelpBox($"{selectedSegments.Count} segments selected.", HelpBoxMessageType.Info));
+                return;
+            }
+
+            var selected = selectedSegments[0];
+
+            string selectedPath = SegmentLocator.FindPath(_provider.Sequence, selected.Segment, "Sequence");
             if (selectedPath == null)
             {
                 _inspectorHost.Add(new HelpBox("Could not locate serialized path for selected segment.", HelpBoxMessageType.Warning));
@@ -402,8 +404,8 @@ namespace TimboJimboEditor.Sequencer
                 return;
             }
 
-            var editor = SegmentEditorRegistry.GetEditor(_selected.Segment);
-            var capturedSegment = _selected.Segment;
+            var editor = SegmentEditorRegistry.GetEditor(selected.Segment);
+            var capturedSegment = selected.Segment;
 
             var container = new IMGUIContainer(() =>
             {
@@ -446,23 +448,37 @@ namespace TimboJimboEditor.Sequencer
             CommitAuthoringChange();
         }
 
-        private void OnDeleteRequested(SegmentPlan plan)
+        private void OnDeleteRequested(IReadOnlyList<SegmentPlan> plans)
         {
-            if (_provider == null || _activeEditRoot?.Segment is not Sequence root || plan?.Segment == null)
+            if (_provider == null || _activeEditRoot?.Segment is not Sequence root || plans == null || plans.Count == 0)
                 return;
 
-            int index = root.Segments.IndexOf(plan.Segment);
-            if (index < 0)
+            var toDelete = new List<Segment>(plans.Count);
+            for (int i = 0; i < plans.Count; i++)
+            {
+                var segment = plans[i]?.Segment;
+                if (segment != null && !toDelete.Contains(segment))
+                    toDelete.Add(segment);
+            }
+
+            if (toDelete.Count == 0)
                 return;
 
             Undo.RecordObject(_provider, "Delete Segment");
-            root.Segments.RemoveAt(index);
-            CommitAuthoringChange();
-
-            if (ReferenceEquals(_selected, plan))
+            var removedAny = false;
+            for (int i = root.Segments.Count - 1; i >= 0; i--)
             {
-                _selected = null;
-                RebuildInspector();
+                if (toDelete.Contains(root.Segments[i]))
+                {
+                    root.Segments.RemoveAt(i);
+                    removedAny = true;
+                }
+            }
+
+            if (removedAny)
+            {
+                _canvas?.SetSelection(Array.Empty<SegmentPlan>());
+                CommitAuthoringChange();
             }
         }
 
@@ -818,7 +834,7 @@ namespace TimboJimboEditor.Sequencer
                 // Re-find the plan that contains this segment for selection
                 var selectedPlan = _activeEditRoot.Children.Find(p => ReferenceEquals(p.Segment, consumingPlan));
                 if (selectedPlan != null)
-                    OnSegmentSelected(selectedPlan);
+                    SelectSingle(selectedPlan);
                 return;
             }
 
@@ -870,7 +886,7 @@ namespace TimboJimboEditor.Sequencer
 
             var newPlan = _activeEditRoot.Children.Find(p => ReferenceEquals(p.Segment, newSegment));
             if (newPlan != null)
-                OnSegmentSelected(newPlan);
+                SelectSingle(newPlan);
         }
 
         private void RestoreRecordingSnapshot()

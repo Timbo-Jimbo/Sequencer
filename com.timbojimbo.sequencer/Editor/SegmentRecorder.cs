@@ -24,6 +24,6 @@ namespace TimboJimboEditor.Sequencer
         public virtual void Consume(Segment segment, BindableProperty property, ValueContainer value, float time) { }
 
         public virtual bool CanCreateFor(BindableProperty property) => false;
-        public virtual Segment CreateSegment(BindableProperty property, ValueContainer value, float time) => null;
+        public virtual Segment CreateSegment(BindableProperty property, ValueContainer unmodifiedValue, ValueContainer value, float time) => null;
     }
 }

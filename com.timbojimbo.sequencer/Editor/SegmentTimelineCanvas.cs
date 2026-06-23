@@ -35,6 +35,8 @@ namespace TimboJimboEditor.Sequencer
         public Action<IReadOnlyList<SegmentPlan>> DeleteRequested;
         public Action<Type, float> AddRequested;
         public Action<float> SeekRequested;
+        public Action CopyRequested;
+        public Action PasteRequested;
         public bool Snap = false;
         public IReadOnlyList<SegmentPlan> SelectedPlans => _selection.ActiveSelection;
 
@@ -251,7 +253,7 @@ namespace TimboJimboEditor.Sequencer
                     return;
                 }
 
-                var marquee = BuildMarqueeFromCenters(anchorBlock.LayoutRect, clickedBlock.LayoutRect);
+                var marquee = BuildMarqueeFromLayoutRects(anchorBlock.LayoutRect, clickedBlock.LayoutRect);
 
                 _transient.Clear();
                 for (int i = 0; i < blocks.Count; i++)
@@ -435,12 +437,10 @@ namespace TimboJimboEditor.Sequencer
                 return false;
             }
 
-            private static Rect BuildMarqueeFromCenters(Rect a, Rect b)
+            private static Rect BuildMarqueeFromLayoutRects(Rect a, Rect b)
             {
-                var ca = a.center;
-                var cb = b.center;
-                var min = Vector2.Min(ca, cb);
-                var max = Vector2.Max(ca, cb);
+                var min = Vector2.Min(a.min, b.min);
+                var max = Vector2.Max(a.max, b.max);
                 return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
             }
         }
@@ -931,24 +931,16 @@ namespace TimboJimboEditor.Sequencer
 
         private void RefreshSelectionVisuals()
         {
-            var prevSelectedCount = 0;
-            var newSelectedCount = 0;
-
             for (int i = 0; i < _blocks.Count; i++)
             {
                 var block = _blocks[i];
                 bool selected = _selection.IsSelected(block.Plan);
-                
-                if (selected) newSelectedCount++;
-                if (block.SelectionHighlight.style.display == DisplayStyle.Flex) prevSelectedCount++;
-
                 block.SelectionHighlight.style.display = selected ? DisplayStyle.Flex : DisplayStyle.None;
             }
 
             using(var scope = new SkipTransitionsScope())
             {
-                if(prevSelectedCount == 0 || newSelectedCount <= 1)
-                    scope.Add(_selectionOutline);
+                scope.Add(_selectionOutline);
 
                 UpdateSelectionOutline();
             }
@@ -1909,6 +1901,23 @@ namespace TimboJimboEditor.Sequencer
                 return;
             }
 
+            if ((evt.ctrlKey || evt.commandKey) && evt.keyCode == KeyCode.C)
+            {
+                if (_selection.ActiveSelection.Count > 0)
+                {
+                    CopyRequested?.Invoke();
+                    evt.StopPropagation();
+                }
+                return;
+            }
+
+            if ((evt.ctrlKey || evt.commandKey) && evt.keyCode == KeyCode.V)
+            {
+                PasteRequested?.Invoke();
+                evt.StopPropagation();
+                return;
+            }
+
             if (evt.keyCode == KeyCode.F)
             {
                 if (_selection.ActiveSelection.Count > 0)
@@ -1955,9 +1964,16 @@ namespace TimboJimboEditor.Sequencer
         {
             var hit = FindBlockAt(evt);
 
-            if (hit != null)
+            if (hit != null || _selection.ActiveSelection.Count > 0)
             {
-                evt.menu.AppendAction("Delete Segment", _ => DeleteRequested?.Invoke(new[] { hit.Plan }));
+                evt.menu.AppendAction(_selection.ActiveSelection.Count > 0 ? "Delete Selection" : "Delete Segment", _ =>
+                {
+                    var selected = _selection.ActiveSelection;
+                    if (selected.Count > 0)
+                        DeleteRequested?.Invoke(selected);
+                    else
+                        DeleteRequested?.Invoke(new[] { hit.Plan });
+                });
                 evt.menu.AppendSeparator();
             }
 

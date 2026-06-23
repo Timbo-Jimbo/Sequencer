@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using TimboJimbo.Core.Utility;
 using TimboJimbo.Sequencer;
+using TimboJimbo.Sequencer.Segments;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Pool;
 using UnityEngine.UIElements;
 
 namespace TimboJimboEditor.Sequencer
@@ -28,8 +31,79 @@ namespace TimboJimboEditor.Sequencer
     /// </summary>
     public class SegmentEditor
     {
+        private static int _selectionHash = 0;
+        private static SerializedObject _selectionSegmentHolderSo;
+        private static SegmentHolder[] _activeSegmentHolders = Array.Empty<SegmentHolder>();
+
         /// <summary>Draw the inspector panel for <paramref name="segment"/>.</summary>
-        public virtual void OnInspectorGUI(Segment segment, SerializedProperty property) => DrawDefaultFields(property);
+        public virtual void OnInspectorGUI(SerializedProperty property) => DrawDefaultFields(property);
+        public void OnInspectorGUI(IReadOnlyList<SerializedProperty> properties)
+        {
+            var currentHash = GetListHash();
+            if (currentHash != _selectionHash)
+            {
+                foreach (var harness in _activeSegmentHolders)
+                    UnityEngine.Object.DestroyImmediate(harness);
+
+                _selectionSegmentHolderSo?.Dispose();
+
+                _activeSegmentHolders = new SegmentHolder[properties.Count];
+
+                for (int i = 0; i < properties.Count; i++)
+                {
+                    var harness = ScriptableObject.CreateInstance<SegmentHolder>();
+                    _activeSegmentHolders[i] = harness;
+                }
+
+                _selectionSegmentHolderSo = new SerializedObject(_activeSegmentHolders);
+                _selectionHash = currentHash;
+            }
+
+            //re-sync the harnesses with the selected segments
+            for (int i = 0; i < properties.Count; i++)
+            {
+                _activeSegmentHolders[i].Segment = JsonUtility.FromJson(JsonUtility.ToJson(properties[i].boxedValue), properties[i].boxedValue.GetType()) as Segment;
+            }
+            
+            _selectionSegmentHolderSo.Update();
+
+            var segmentsProp = _selectionSegmentHolderSo.FindProperty("Segment");
+            OnInspectorGUI(segmentsProp);
+
+            if (_selectionSegmentHolderSo.ApplyModifiedProperties())
+            {
+                for (int i = 0; i < properties.Count; i++)
+                {
+                    //walk and copy each field that was modified. (modified fields will NOT have mixed values)
+                    var copy = segmentsProp.Copy();
+                    var end = segmentsProp.GetEndProperty();
+
+                    while (copy.NextVisible(true) && !SerializedProperty.EqualContents(copy, end))
+                    {
+                        var relativePath = copy.propertyPath.Replace("Segment.", "");
+                        var targetProp = properties[i].FindPropertyRelative(relativePath);
+
+                        if (targetProp != null && !copy.hasMultipleDifferentValues)
+                            targetProp.boxedValue = copy.boxedValue;
+                    }
+                }
+            }
+            
+            int GetListHash()
+            {
+                unchecked
+                {
+                    var hash = 23;
+                    hash = hash * 31 + properties.Count;
+                    hash = hash * 31 + properties[0].serializedObject.targetObject.GetEntityId();
+
+                    foreach (var property in properties)
+                        hash = hash * 31 + property.propertyPath.GetHashCode();
+
+                    return hash;
+                }
+            }
+        }
 
         /// <summary>Populate the block overlay inside the timeline canvas.</summary>
         public virtual void OnBlockGUI(Segment segment, VisualElement block) => DefaultBlockGUI(segment, block);
@@ -208,5 +282,12 @@ namespace TimboJimboEditor.Sequencer
                 return hash;
             }
         }
+        
+        private class SegmentHolder : ScriptableObject
+        {
+            [SerializeReference]
+            public Segment Segment = new Sequence();
+        }
+
     }
 }

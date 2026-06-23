@@ -14,8 +14,12 @@ namespace TimboJimboEditor.Sequencer
         {
 
             var sorted = new List<T>(items.Count);
+            var indexLookup = new Dictionary<T, int>(items.Count);
             for (int i = 0; i < items.Count; i++)
+            {
                 sorted.Add(items[i]);
+                indexLookup[items[i]] = i;
+            }
 
             var minStart = float.MaxValue;
             var maxEnd = float.MinValue;
@@ -31,11 +35,21 @@ namespace TimboJimboEditor.Sequencer
                 minStart = Mathf.Min(minStart, startA, startB);
                 maxEnd = Mathf.Max(maxEnd, endA, endB);
 
+                //stablize 
+                startA = Mathf.Round(startA * 1000f) / 1000f;
+                startB = Mathf.Round(startB * 1000f) / 1000f;
+                endA = Mathf.Round(endA * 1000f) / 1000f;
+                endB = Mathf.Round(endB * 1000f) / 1000f;
+
                 int byStart = startA.CompareTo(startB);
                 if(byStart != 0) return byStart;
                 var lengthA = endA - startA;
                 var lengthB = endB - startB;
-                return lengthB.CompareTo(lengthA);
+
+                var byLength = lengthB.CompareTo(lengthA);
+                if(byLength != 0) return byLength;
+
+                return indexLookup[a].CompareTo(indexLookup[b]);
             });
 
             var laneEnds = new List<float>();

@@ -35,7 +35,7 @@ namespace TimboJimboEditor.Sequencer.Segments
             return true;
         }
 
-        public override Segment CreateSegment(BindableProperty property, ValueContainer value, float time)
+        public override Segment CreateSegment(BindableProperty property, ValueContainer unmodifiedValue, ValueContainer value, float time)
         {
             float duration = Mathf.Clamp(time, 0.01f, 1.0f);
             return new PropertyTweener
@@ -44,6 +44,7 @@ namespace TimboJimboEditor.Sequencer.Segments
                 Duration = duration,
                 Property = property,
                 StartMode = EasedStartMode.StartFromCurrent,
+                StartValue = unmodifiedValue,
                 EndMode = EasedEndMode.EndAtAbsolute,
                 EndValue = value
             };

@@ -13,11 +13,11 @@ namespace TimboJimboEditor.Sequencer.Segments
     {
         private static Type[] _serializableFactoryTypes;
 
-        public override void OnInspectorGUI(Segment segment, SerializedProperty property)
+        public override void OnInspectorGUI(SerializedProperty property)
         {
             var pauseAtProp = property.FindPropertyRelative("PauseAt");
             EditorGUILayout.PropertyField(pauseAtProp);
-
+            
             var resumeCheckerProp = property.FindPropertyRelative("ResumeChecker");
             DrawResumeCheckerField(resumeCheckerProp);
         }
@@ -35,49 +35,49 @@ namespace TimboJimboEditor.Sequencer.Segments
             var currentType = currentValue?.GetType();
 
             EditorGUILayout.BeginVertical();
-
-            var rect = EditorGUILayout.GetControlRect(true, EditorGUIUtility.singleLineHeight);
-            var labelRect = new Rect(rect.x, rect.y, EditorGUIUtility.labelWidth, rect.height);
-            var typeRect = new Rect(rect.x + EditorGUIUtility.labelWidth, rect.y, rect.width - EditorGUIUtility.labelWidth, rect.height);
-
-            if (property.hasVisibleChildren)
+            
+            if(property.serializedObject.targetObjects.Length > 1)
             {
-                property.isExpanded = EditorGUI.Foldout(labelRect, property.isExpanded, property.displayName, true);
-            }
-            else
-            {
-                EditorGUI.LabelField(labelRect, property.displayName);
+                EditorGUILayout.LabelField(property.displayName, "Multi-object editing not supported");
+                EditorGUILayout.EndVertical();
+                return;
             }
 
-            if (EditorGUI.DropdownButton(typeRect, new GUIContent(GetTypeDisplayName(currentType)), FocusType.Keyboard))
+            var optionNames = new string[_serializableFactoryTypes.Length + 1];
+            optionNames[0] = "None";
+            var currentIndex = 0;
+
+            for (var i = 0; i < _serializableFactoryTypes.Length; i++)
             {
-                var menu = new GenericMenu();
-                menu.AddItem(new GUIContent("None"), currentType == null, () =>
+                var type = _serializableFactoryTypes[i];
+                var typeName = ObjectNames.NicifyVariableName(type.Name);
+                optionNames[i + 1] = typeName;
+
+                if (currentType == type)
+                {
+                    currentIndex = i + 1;
+                }
+            }
+
+            EditorGUI.BeginChangeCheck();
+            var selectedIndex = EditorGUILayout.Popup(property.displayName, currentIndex, optionNames);
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (selectedIndex == 0)
                 {
                     property.managedReferenceValue = null;
-                    property.serializedObject.ApplyModifiedProperties();
-                    GUI.changed = true;
-                });
-
-                foreach (var type in _serializableFactoryTypes)
-                {
-                    var capturedType = type;
-                    var typeName = ObjectNames.NicifyVariableName(type.Name);
-                    menu.AddItem(
-                        new GUIContent(typeName),
-                        currentType == type,
-                        () =>
-                        {
-                            property.managedReferenceValue = FormatterServices.GetUninitializedObject(capturedType);
-                            property.serializedObject.ApplyModifiedProperties();
-                            GUI.changed = true;
-                        }
-                    );
                 }
-                menu.DropDown(typeRect);
+                else
+                {
+                    var selectedType = _serializableFactoryTypes[selectedIndex - 1];
+                    property.managedReferenceValue = FormatterServices.GetUninitializedObject(selectedType);
+                }
+
+                property.serializedObject.ApplyModifiedProperties();
+                GUI.changed = true;
             }
 
-            if (property.isExpanded && property.hasVisibleChildren && currentValue != null)
+            if (property.hasVisibleChildren && currentValue != null)
             {
                 EditorGUI.indentLevel++;
                 var iterator = property.Copy();

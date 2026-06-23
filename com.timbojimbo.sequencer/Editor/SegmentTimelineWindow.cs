@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
 using TimboJimbo.PropertyBindings;
-using TimboJimboEditor;
 using TimboJimboEditor.PropertyBindings.Utility;
 using UnityEditor.SceneManagement;
 using TimboJimbo.Sequencer;
@@ -20,7 +20,6 @@ namespace TimboJimboEditor.Sequencer
         private SegmentPlan _activeEditRoot;
 
         private Label _providerLabel;
-        private HelpBox _diagnostic;
         private SegmentTimelineCanvas _canvas;
         private VisualElement _inspectorHost;
         private ToolbarToggle _playToggle;
@@ -49,6 +48,16 @@ namespace TimboJimboEditor.Sequencer
 
         private readonly Dictionary<BindableProperty, RecordedEdit> _recordedEdits = new();
         private bool IsPreviewing => _previewSession != null;
+
+        private struct ClipboardEntry
+        {
+            public string TypeName;
+            public string Json;
+            public float StartTime;
+            public float EndTime;
+        }
+
+        private static readonly List<ClipboardEntry> _clipboard = new();
         private bool IsRecording => _editTracker != null;
         private IReadOnlyList<SegmentPlan> SelectedSegments => _canvas?.SelectedPlans ?? Array.Empty<SegmentPlan>();
 
@@ -169,14 +178,7 @@ namespace TimboJimboEditor.Sequencer
             toolbar.Add(_previewIndicator);
             toolbar.Add(_recordingIndicator);
 
-
             rootVisualElement.Add(toolbar);
-
-            _diagnostic = new HelpBox(string.Empty, HelpBoxMessageType.Info)
-            {
-                style = { display = DisplayStyle.None }
-            };
-            rootVisualElement.Add(_diagnostic);
 
             var split = new TwoPaneSplitView(0, 700, TwoPaneSplitViewOrientation.Horizontal)
             {
@@ -190,6 +192,8 @@ namespace TimboJimboEditor.Sequencer
             _canvas.DeleteRequested += OnDeleteRequested;
             _canvas.AddRequested += OnAddRequested;
             _canvas.SeekRequested += OnSeekRequested;
+            _canvas.CopyRequested += OnCopyRequested;
+            _canvas.PasteRequested += OnPasteRequested;
             leftPane.Add(_canvas);
 
             _canvasBorderOverlay = new VisualElement
@@ -276,7 +280,6 @@ namespace TimboJimboEditor.Sequencer
                 _canvas.SetTime(_displayTime);
                 RebuildInspector();
                 UpdateTimeUi();
-                SetDiagnostic("No provider selected.", HelpBoxMessageType.Info, show: true);
                 return;
             }
 
@@ -290,7 +293,6 @@ namespace TimboJimboEditor.Sequencer
                 _canvas.SetTime(_displayTime);
                 RebuildInspector();
                 UpdateTimeUi();
-                SetDiagnostic("Root plan is invalid or not a SequenceSegment.", HelpBoxMessageType.Error, show: true);
                 return;
             }
 
@@ -346,7 +348,8 @@ namespace TimboJimboEditor.Sequencer
             UpdatePreviewVisuals();
             UpdateTimeUi();
 
-            RebuildInspector();
+            if(!preserveSelection)
+                RebuildInspector();
         }
 
         private void OnCanvasSelectionChanged(IReadOnlyList<SegmentPlan> selected)
@@ -369,7 +372,20 @@ namespace TimboJimboEditor.Sequencer
 
             if (_provider == null)
             {
-                _inspectorHost.Add(new HelpBox("No provider selected.", HelpBoxMessageType.Info));
+                _inspectorHost.Add(new Label("No Selected Provider")
+                {
+                    style =
+                    {
+                        unityTextAlign = TextAnchor.MiddleCenter,
+                        unityFontStyleAndWeight = FontStyle.Italic,
+                        color = new Color(0.5f, 0.5f, 0.5f, 1f),
+                        marginTop = 20,
+                        marginLeft = 4,
+                        marginRight = 4,
+                        marginBottom = 20,
+                    }
+                });
+                
                 return;
             }
 
@@ -381,48 +397,86 @@ namespace TimboJimboEditor.Sequencer
                 return;
             }
 
-            if (selectedSegments.Count > 1)
-            {
-                _inspectorHost.Add(new HelpBox($"{selectedSegments.Count} segments selected.", HelpBoxMessageType.Info));
-                return;
-            }
-
-            var selected = selectedSegments[0];
-
-            string selectedPath = SegmentLocator.FindPath(_provider.Sequence, selected.Segment, "Sequence");
-            if (selectedPath == null)
-            {
-                _inspectorHost.Add(new HelpBox("Could not locate serialized path for selected segment.", HelpBoxMessageType.Warning));
-                return;
-            }
-
+            var segmentPropertiesByType = new Dictionary<Type, List<SerializedProperty>>();
             _serializedProvider.Update();
-            var segmentProp = _serializedProvider.FindProperty(selectedPath);
-            if (segmentProp == null)
+
+            foreach(var selected in selectedSegments)
             {
-                _inspectorHost.Add(new HelpBox("Segment serialized property is no longer valid.", HelpBoxMessageType.Warning));
-                return;
+                string selectedPath = SegmentLocator.FindPath(_provider.Sequence, selected.Segment, "Sequence");
+
+                if (selectedPath == null)
+                    continue;
+
+                var list = segmentPropertiesByType.TryGetValue(selected.Segment.GetType(), out var existingList)
+                    ? existingList
+                    : (segmentPropertiesByType[selected.Segment.GetType()] = new List<SerializedProperty>());
+
+                list.Add(_serializedProvider.FindProperty(selectedPath));
             }
 
-            var editor = SegmentEditorRegistry.GetEditor(selected.Segment);
-            var capturedSegment = selected.Segment;
-
-            var container = new IMGUIContainer(() =>
+            foreach (var entry in segmentPropertiesByType)
             {
-                _serializedProvider.Update();
+                var editor = SegmentEditorRegistry.GetEditorByType(entry.Key);
 
-                editor.OnInspectorGUI(capturedSegment, segmentProp);
-
-                if (_serializedProvider.ApplyModifiedProperties())
+                var entryContainer = new VisualElement
                 {
-                    EditorUtility.SetDirty(_provider);
-                    PrefabUtility.RecordPrefabInstancePropertyModifications(_provider);
-                    RefreshPlan(preserveSelection: true);
-                }
-            });
-            container.style.marginLeft = 4;
-            container.style.marginRight = 4;
-            _inspectorHost.Add(container);
+                    style =
+                    {
+                        borderBottomWidth = 1,
+                        borderBottomColor = new Color(0f, 0f, 0f, 0.4f),
+                    }
+                };
+                _inspectorHost.Add(entryContainer);
+
+                var toolbar = new Toolbar { style = { paddingLeft = 4, paddingRight = 4, backgroundColor = new Color(1f, 1f, 1f, 0.05f) } };
+                entryContainer.Add(toolbar);
+
+                var titleText = ObjectNames.NicifyVariableName(entry.Key.Name);
+                if (entry.Value.Count > 1)
+                    titleText += $" ({entry.Value.Count})";
+
+                var title = new Label(titleText)
+                {
+                    style =
+                    {
+                        unityFontStyleAndWeight = FontStyle.Bold,
+                        unityTextAlign = TextAnchor.MiddleLeft,
+                    }
+                };
+                toolbar.Add(title);
+
+                var body = new VisualElement()
+                {
+                    style =
+                    {
+                        paddingTop = 8,
+                        paddingLeft = 4,
+                        paddingRight = 4,
+                        paddingBottom = 8,
+                    }
+                };
+                entryContainer.Add(body);
+
+                var inspector = new IMGUIContainer(() =>
+                {
+                    _serializedProvider.Update();
+
+                    if(entry.Value.Count == 1)
+                        editor.OnInspectorGUI(entry.Value[0]);
+                    else
+                        editor.OnInspectorGUI(entry.Value);
+
+                    if (_serializedProvider.ApplyModifiedProperties())
+                    {
+                        EditorUtility.SetDirty(_provider);
+                        PrefabUtility.RecordPrefabInstancePropertyModifications(_provider);
+                        RefreshPlan(preserveSelection: true);
+                    }
+                });
+                body.Add(inspector);
+
+
+            }
         }
 
         private void OnTimeAdjustmentCommitted(SegmentPlan plan, float newStart, float newDuration)
@@ -478,6 +532,7 @@ namespace TimboJimboEditor.Sequencer
             if (removedAny)
             {
                 _canvas?.SetSelection(Array.Empty<SegmentPlan>());
+                RebuildInspector();
                 CommitAuthoringChange();
             }
         }
@@ -511,6 +566,83 @@ namespace TimboJimboEditor.Sequencer
             EditorUtility.SetDirty(_provider);
             PrefabUtility.RecordPrefabInstancePropertyModifications(_provider);
             RefreshPlan(preserveSelection: true);
+        }
+
+        private void OnCopyRequested()
+        {
+            var selected = SelectedSegments;
+            if (selected.Count == 0)
+                return;
+
+            _clipboard.Clear();
+            for (int i = 0; i < selected.Count; i++)
+            {
+                var plan = selected[i];
+                _clipboard.Add(new ClipboardEntry
+                {
+                    TypeName = plan.Segment.GetType().AssemblyQualifiedName,
+                    Json = JsonUtility.ToJson(plan.Segment),
+                    StartTime = plan.Timing.AbsoluteStartTime,
+                    EndTime = plan.Timing.AbsoluteEndTime,
+                });
+            }
+        }
+
+        private void OnPasteRequested()
+        {
+            if (_provider == null || _activeEditRoot?.Segment is not Sequence root || _clipboard.Count == 0)
+                return;
+
+            float earliestStart = float.MaxValue;
+            float latestEnd = float.MinValue;
+            for (int i = 0; i < _clipboard.Count; i++)
+            {
+                earliestStart = Mathf.Min(earliestStart, _clipboard[i].StartTime);
+                latestEnd = Mathf.Max(latestEnd, _clipboard[i].EndTime);
+            }
+            float clipboardDuration = latestEnd - earliestStart;
+            float pasteOrigin = IsPreviewing
+                ? _displayTime - clipboardDuration
+                : earliestStart;
+
+            Undo.RecordObject(_provider, "Paste Segments");
+            var pastedSegments = new List<Segment>(_clipboard.Count);
+
+            for (int i = 0; i < _clipboard.Count; i++)
+            {
+                var entry = _clipboard[i];
+                var type = Type.GetType(entry.TypeName);
+                if (type == null)
+                    continue;
+
+                Segment segment;
+                try { segment = (Segment)JsonUtility.FromJson(entry.Json, type); }
+                catch { continue; }
+
+                float newStart = pasteOrigin + (entry.StartTime - earliestStart);
+                if (segment is IStartTimeConfigurable timeConfig)
+                    timeConfig.SetStartTime(Mathf.Max(0f, newStart));
+
+                root.Segments.Add(segment);
+                pastedSegments.Add(segment);
+            }
+
+            if (pastedSegments.Count == 0)
+                return;
+
+            CommitAuthoringChange();
+
+            if (_activeEditRoot == null)
+                return;
+
+            var newPlans = _activeEditRoot.Children
+                .Where(p => pastedSegments.Contains(p.Segment))
+                .ToList();
+            if (newPlans.Count > 0)
+            {
+                _canvas?.SetSelection(newPlans);
+                RebuildInspector();
+            }
         }
 
         private void EnsurePreviewSession()
@@ -668,13 +800,6 @@ namespace TimboJimboEditor.Sequencer
                 _canvasBorderOverlay.style.borderLeftWidth = borderWidth;
                 _canvasBorderOverlay.style.borderRightWidth = borderWidth;
             }
-        }
-
-        private void SetDiagnostic(string message, HelpBoxMessageType type, bool show)
-        {
-            _diagnostic.messageType = type;
-            _diagnostic.text = message;
-            _diagnostic.style.display = show ? DisplayStyle.Flex : DisplayStyle.None;
         }
 
         // ======================================================================
@@ -859,7 +984,7 @@ namespace TimboJimboEditor.Sequencer
             Segment newSegment;
             try
             {
-                newSegment = creatorRecorder.CreateSegment(edit.BindableProperty, edit.LatestValue, cursor);
+                newSegment = creatorRecorder.CreateSegment(edit.BindableProperty, edit.InitialValue, edit.LatestValue, cursor);
             }
             catch (Exception e)
             {

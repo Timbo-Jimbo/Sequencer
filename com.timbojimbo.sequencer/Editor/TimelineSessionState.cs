@@ -64,7 +64,7 @@ namespace TimboJimboEditor.Sequencer
 
                 if (existingByIndex.TryGetValue(i, out var reused) && reused != null)
                 {
-                    reused.RefreshFrom(Provider, segment, i);
+                    reused.Bind(Provider, segment, i);
                     nextModels.Add(reused);
                     existingByIndex.Remove(i);
                 }
@@ -72,7 +72,7 @@ namespace TimboJimboEditor.Sequencer
                 {
                     var model = ScriptableObject.CreateInstance<SegmentSelectionModel>();
                     model.hideFlags = HideFlags.DontSave;
-                    model.InitializeFrom(Provider, segment, i);
+                    model.Bind(Provider, segment, i);
                     nextModels.Add(model);
                 }
             }
@@ -92,17 +92,91 @@ namespace TimboJimboEditor.Sequencer
             SessionRefreshed?.Invoke();
         }
 
-        public void CommitAll()
+        public static void CommitChanges(IReadOnlyList<SegmentSelectionModel> segmentModels)
         {
-            if (Provider == null)
+            if (segmentModels == null || segmentModels.Count == 0)
                 return;
 
-            Undo.RecordObject(Provider, "Commit Session Changes");
-            for (int i = 0; i < Models.Count; i++)
+            var uniqueProviders = new HashSet<SequenceProvider>();
+
+            var groups = segmentModels
+                .Where(m => m != null && m.Handle.Provider != null && m.Handle.Provider.Sequence != null)
+                .GroupBy(m => m.Handle.Provider);
+
+            foreach (var group in groups)
             {
-                Models[i].CommitToProvider();
+                var provider = group.Key;
+                var segments = provider.Sequence.Segments;
+
+                Undo.RecordObject(provider, "Edit Segment");
+
+                bool changesApplied = false;
+
+                foreach (var model in group)
+                {
+                    int index = model.Handle.Index;
+                    if (index < 0 || index >= segments.Count)
+                        continue;
+
+                    var existing = segments[index];
+                    if (existing != null && existing.GetType() == model.Segment.GetType())
+                    {
+                        // Overwrite the existing instance in place to preserve its
+                        // [SerializeReference] RefId. Replacing it churns RefIds and
+                        // corrupts Undo/Redo state.
+                        JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(model.Segment), existing);
+                    }
+                    else
+                    {
+                        segments[index] = CloneSegment(model.Segment);
+                    }
+                    changesApplied = true;
+                }
+
+                if (changesApplied)
+                {
+                    uniqueProviders.Add(provider);
+                    EditorUtility.SetDirty(provider);
+                    PrefabUtility.RecordPrefabInstancePropertyModifications(provider);
+                }
             }
-            Refresh();
+
+            var windows = Resources.FindObjectsOfTypeAll<SegmentTimelineWindow>();
+            for (int i = 0; i < windows.Length; i++)
+            {
+                var window = windows[i];
+                if (window != null && uniqueProviders.Contains(window.Provider))
+                {
+                    window.RefreshPlan();
+                }
+            }
+        }
+
+        private static Segment CloneSegment(Segment source)
+        {
+            if (source == null)
+                return null;
+
+            return JsonUtility.FromJson(JsonUtility.ToJson(source), source.GetType()) as Segment;
+        }
+
+        public void UpdateProxyTimings(IReadOnlyList<(SegmentSelectionModel model, float startTime, float duration)> timingChanges)
+        {
+            if (timingChanges == null || timingChanges.Count == 0)
+                return;
+
+            var proxiesToCommit = new List<SegmentSelectionModel>();
+            for (int i = 0; i < timingChanges.Count; i++)
+            {
+                var change = timingChanges[i];
+                if (change.model == null) continue;
+
+                change.model.StartTime = change.startTime;
+                change.model.Duration = change.duration;
+                proxiesToCommit.Add(change.model);
+            }
+
+            CommitChanges(proxiesToCommit);
         }
 
         public void AddSegment(Type type, float time)

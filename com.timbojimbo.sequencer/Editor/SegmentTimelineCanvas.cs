@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using TimboJimbo.Sequencer;
 using TimboJimboEditor.Sequencer.Blocks;
 using UnityEngine;
 using UnityEngine.Pool;
@@ -29,9 +27,10 @@ namespace TimboJimboEditor.Sequencer
         private static readonly Color PreviewAccent = new Color(0.173f, 0.471f, 0.922f, 1.000f);
 
         private enum DragKind { None, ResizeLeft, ResizeRight, Move }
+        private enum PointerSessionMode { BackgroundPress, BlockPress, SelectionPress, Marquee, Transform, Scrub, Pan }
 
         public Action<IReadOnlyList<SegmentSelectionModel>> SelectionChanged;
-        public Action<SegmentSelectionModel, float, float> TimeAdjustmentCommitted;
+        public Action<IReadOnlyList<(SegmentSelectionModel model, float start, float duration)>> TimeAdjustmentCommitted;
         public Action<IReadOnlyList<SegmentSelectionModel>> DeleteRequested;
         public Action<Type, float> AddRequested;
         public Action<float> SeekRequested;
@@ -56,27 +55,10 @@ namespace TimboJimboEditor.Sequencer
         private float _pixelsPerSecond = 120f;
         private float _viewStart;
         private bool _viewWasEverFramed;
-        private bool _panning;
-        private Vector2 _panStartPointer;
-        private float _panStartView;
 
         private SelectionTransformOperation _selectionTransform;
-
-        private bool _scrubbingTimeline;
-        private int _scrubPointerId = -1;
-        private bool _marqueeArmed;
-        private bool _marqueeSelecting;
-        private int _marqueePointerId = -1;
-        private Vector2 _marqueeStartLocal;
-        private MarqueeMode _marqueeMode;
-        private PlanBlock _pendingSelectedClickBlock;
-        private int _pendingSelectedClickPointerId = -1;
-        private bool _pendingSelectedClickShift;
-        private bool _pendingSelectedClickAction;
-        private bool _selectionTransformArmed;
-        private int _selectionTransformArmPointerId = -1;
-        private Vector2 _selectionTransformArmStartWorld;
-        private bool IsDraggingSelection => _selectionTransform != null;
+        private PointerSession _pointerSession;
+        private bool IsDraggingSelection => _pointerSession?.Mode == PointerSessionMode.Transform && _selectionTransform != null;
 
         private readonly struct SegmentSnapCandidate
         {
@@ -172,6 +154,21 @@ namespace TimboJimboEditor.Sequencer
             public VisualElement SelectionHighlight;
             public VisualElement Root;
             public Rect LayoutRect;
+        }
+
+        private sealed class PointerSession
+        {
+            public PointerSessionMode Mode;
+            public int PointerId;
+            public Vector2 PointerStartWorld;
+            public Vector2 PointerStartLocal;
+            public Vector2 PanStartPointer;
+            public float PanStartView;
+            public PlanBlock PressedBlock;
+            public bool Shift;
+            public bool Action;
+            public bool BlockWasSelected;
+            public MarqueeMode MarqueeMode;
         }
 
         private sealed class SelectionState
@@ -734,6 +731,7 @@ namespace TimboJimboEditor.Sequencer
 
         public void SetView(IReadOnlyList<SegmentSelectionModel> activeModels, IReadOnlyList<SegmentSelectionModel> selectedModels)
         {
+            ResetInteractionState();
             _selection.ReplaceConcrete(selectedModels);
 
             _models.Clear();
@@ -853,27 +851,28 @@ namespace TimboJimboEditor.Sequencer
                     bool action = evt.ctrlKey || evt.commandKey;
 
                     bool selectedBeforeClick = _selection.IsSelected(planVisual.Model);
-                    if (selectedBeforeClick)
+                    if (!selectedBeforeClick)
                     {
-                        ArmSelectionTransformFromPointer(evt.position, evt.pointerId);
-                        _pendingSelectedClickBlock = planVisual;
-                        _pendingSelectedClickPointerId = evt.pointerId;
-                        _pendingSelectedClickShift = shift;
-                        _pendingSelectedClickAction = action;
+                        HandleBlockSelectionClick(planVisual, shift, action);
 
-                        evt.StopPropagation();
-                        return;
+                        if (shift || action)
+                        {
+                            evt.StopPropagation();
+                            return;
+                        }
                     }
 
-                    HandleBlockSelectionClick(planVisual, shift, action);
-
-                    if (shift || action)
+                    BeginPointerSession(new PointerSession
                     {
-                        evt.StopPropagation();
-                        return;
-                    }
-
-                    ArmSelectionTransformFromPointer(evt.position, evt.pointerId);
+                        Mode = PointerSessionMode.BlockPress,
+                        PointerId = evt.pointerId,
+                        PointerStartWorld = evt.position,
+                        PointerStartLocal = this.WorldToLocal(evt.position),
+                        PressedBlock = planVisual,
+                        Shift = shift,
+                        Action = action,
+                        BlockWasSelected = selectedBeforeClick,
+                    });
 
                     evt.StopPropagation();
                 });
@@ -897,25 +896,7 @@ namespace TimboJimboEditor.Sequencer
                 }
                 else
                 {
-                    var blockContainer = new VisualElement
-                    {
-                        style =
-                        {
-                            position = Position.Absolute,
-                            left = 0f,
-                            top = 0f,
-                            right = 0f,
-                            bottom = 0f,
-                            marginLeft = 4f,
-                            marginRight = 4f,
-                            marginTop = 2f,
-                            marginBottom = 2f,
-                        }
-                    };
-
-                    planVisual.Root.Add(blockContainer);
-
-                    editor.OnBlockGUI(model.Segment, blockContainer);
+                    editor.OnBlockGUI(model.Segment, planVisual.Root);
                 }
 
                 _contentRoot.Add(planVisual.Root);
@@ -1019,6 +1000,45 @@ namespace TimboJimboEditor.Sequencer
             SelectionChanged?.Invoke(targetSelection);
         }
 
+        private void BeginPointerSession(PointerSession session)
+        {
+            _pointerSession = session;
+            this.CapturePointer(session.PointerId);
+        }
+
+        private void EndPointerSession()
+        {
+            if (_pointerSession == null)
+                return;
+
+            int pointerId = _pointerSession.PointerId;
+            _pointerSession = null;
+
+            if (this.HasPointerCapture(pointerId))
+                this.ReleasePointer(pointerId);
+        }
+
+        private void ResetInteractionState()
+        {
+            if (_selectionTransform != null)
+                _selectionTransform = null;
+
+            if (_marqueeBox.style.display != DisplayStyle.None)
+                _marqueeBox.style.display = DisplayStyle.None;
+
+            HideSnapGuide();
+            EndPointerSession();
+        }
+
+        private static bool HasExceededDragThreshold(PointerSession session, Vector2 worldPosition)
+        {
+            if (session == null)
+                return false;
+
+            float thresholdSq = TransformDragThresholdPx * TransformDragThresholdPx;
+            return (worldPosition - session.PointerStartWorld).sqrMagnitude >= thresholdSq;
+        }
+
         private void FrameAllInternal()
         {
             float width = resolvedStyle.width;
@@ -1039,7 +1059,7 @@ namespace TimboJimboEditor.Sequencer
             _viewStart = viewStart;
         }
 
-        private bool TryBeginSelectionTransformFromPointer(Vector2 worldPosition, int pointerId)
+        private bool BeginSelectionTransformFromPointer(Vector2 worldPosition, int pointerId)
         {
             if (!TryGetSelectionTransformStart(worldPosition, out DragKind kind, out float selectionStartTime, out float selectionDurationTime))
                 return false;
@@ -1051,28 +1071,7 @@ namespace TimboJimboEditor.Sequencer
                 selectionStartTime,
                 selectionDurationTime,
                 _selection.ActiveSelection);
-
-            this.CapturePointer(pointerId);
             return true;
-        }
-
-        private bool ArmSelectionTransformFromPointer(Vector2 worldPosition, int pointerId)
-        {
-            if (!TryGetSelectionTransformStart(worldPosition, out _, out _, out _))
-                return false;
-
-            _selectionTransformArmed = true;
-            _selectionTransformArmPointerId = pointerId;
-            _selectionTransformArmStartWorld = worldPosition;
-            this.CapturePointer(pointerId);
-            return true;
-        }
-
-        private void ClearSelectionTransformArm()
-        {
-            _selectionTransformArmed = false;
-            _selectionTransformArmPointerId = -1;
-            _selectionTransformArmStartWorld = default;
         }
 
         private bool TryGetSelectionTransformStart(Vector2 worldPosition, out DragKind kind, out float selectionStartTime, out float selectionDurationTime)
@@ -1395,13 +1394,9 @@ namespace TimboJimboEditor.Sequencer
             snappedTime = bestSnapTime;
 
             if (foundKeyframe && bestIsSegmentSnap)
-            {
                 SetSnapGuide(snappedTime);
-            }
             else
-            {
                 HideSnapGuide();
-            }
 
             return true;
         }
@@ -1594,29 +1589,42 @@ namespace TimboJimboEditor.Sequencer
                 if (clickedRuler)
                 {
                     SeekRequested?.Invoke(XToTime(local.x));
-                    _scrubbingTimeline = true;
-                    _scrubPointerId = evt.pointerId;
-                    this.CapturePointer(evt.pointerId);
+                    BeginPointerSession(new PointerSession
+                    {
+                        Mode = PointerSessionMode.Scrub,
+                        PointerId = evt.pointerId,
+                        PointerStartWorld = evt.position,
+                        PointerStartLocal = local,
+                    });
                     evt.StopPropagation();
                     return;
                 }
 
-                if (ArmSelectionTransformFromPointer(evt.position, evt.pointerId))
+                if (TryGetSelectionTransformStart(evt.position, out _, out _, out _))
                 {
+                    BeginPointerSession(new PointerSession
+                    {
+                        Mode = PointerSessionMode.SelectionPress,
+                        PointerId = evt.pointerId,
+                        PointerStartWorld = evt.position,
+                        PointerStartLocal = local,
+                    });
                     evt.StopPropagation();
                     return;
                 }
 
-                _marqueeArmed = true;
-                _marqueeSelecting = false;
-                _marqueePointerId = evt.pointerId;
-                _marqueeStartLocal = local;
-                _marqueeMode = evt.shiftKey
-                    ? MarqueeMode.Additive
-                    : (evt.ctrlKey || evt.commandKey)
-                        ? MarqueeMode.Subtractive
-                        : MarqueeMode.Replace;
-                this.CapturePointer(evt.pointerId);
+                BeginPointerSession(new PointerSession
+                {
+                    Mode = PointerSessionMode.BackgroundPress,
+                    PointerId = evt.pointerId,
+                    PointerStartWorld = evt.position,
+                    PointerStartLocal = local,
+                    MarqueeMode = evt.shiftKey
+                        ? MarqueeMode.Additive
+                        : (evt.ctrlKey || evt.commandKey)
+                            ? MarqueeMode.Subtractive
+                            : MarqueeMode.Replace,
+                });
 
                 evt.StopPropagation();
                 return;
@@ -1625,103 +1633,145 @@ namespace TimboJimboEditor.Sequencer
             if (evt.button != 1 && evt.button != 2)
                 return;
 
-            _panning = true;
-            _panStartPointer = evt.position;
-            _panStartView = _viewStart;
-            this.CapturePointer(evt.pointerId);
+            BeginPointerSession(new PointerSession
+            {
+                Mode = PointerSessionMode.Pan,
+                PointerId = evt.pointerId,
+                PointerStartWorld = evt.position,
+                PointerStartLocal = this.WorldToLocal(evt.position),
+                PanStartPointer = evt.position,
+                PanStartView = _viewStart,
+            });
             evt.StopPropagation();
         }
 
         private void OnPointerMove(PointerMoveEvent evt)
         {
-            if (_marqueeArmed && _marqueePointerId == evt.pointerId && this.HasPointerCapture(evt.pointerId))
-            {
-                var local = this.WorldToLocal(evt.position);
+            if (_pointerSession == null || _pointerSession.PointerId != evt.pointerId || !this.HasPointerCapture(evt.pointerId))
+                return;
 
-                if (!_marqueeSelecting)
+            switch (_pointerSession.Mode)
+            {
+                case PointerSessionMode.BackgroundPress:
                 {
-                    if ((local - _marqueeStartLocal).sqrMagnitude < 9f)
+                    var local = this.WorldToLocal(evt.position);
+
+                    if ((local - _pointerSession.PointerStartLocal).sqrMagnitude < 9f)
                     {
                         evt.StopPropagation();
                         return;
                     }
 
-                    _marqueeSelecting = true;
-                    _selection.BeginMarquee(_marqueeMode);
+                    _pointerSession.Mode = PointerSessionMode.Marquee;
+                    _selection.BeginMarquee(_pointerSession.MarqueeMode);
                     _marqueeBox.style.display = DisplayStyle.Flex;
-                }
 
-                var rect = UpdateMarqueeBoxRect(local);
-                var hits = CollectMarqueeHits(rect);
-                _selection.UpdateMarquee(hits);
-                RefreshSelectionVisuals();
+                    var rect = UpdateMarqueeBoxRect(local);
+                    var hits = CollectMarqueeHits(rect);
+                    _selection.UpdateMarquee(hits);
+                    RefreshSelectionVisuals();
 
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_scrubbingTimeline && _scrubPointerId == evt.pointerId && this.HasPointerCapture(evt.pointerId))
-            {
-                var local = this.WorldToLocal(evt.position);
-                SeekRequested?.Invoke(XToTime(local.x));
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_selectionTransformArmed && _selectionTransformArmPointerId == evt.pointerId && this.HasPointerCapture(evt.pointerId))
-            {
-                float thresholdSq = TransformDragThresholdPx * TransformDragThresholdPx;
-                var pointerPos = new Vector2(evt.position.x, evt.position.y);
-                float dragSq = (pointerPos - _selectionTransformArmStartWorld).sqrMagnitude;
-                if (dragSq < thresholdSq)
-                {
                     evt.StopPropagation();
                     return;
                 }
 
-                if (TryBeginSelectionTransformFromPointer(_selectionTransformArmStartWorld, evt.pointerId))
-                    RebuildSnapTimes();
-
-                ClearSelectionTransformArm();
-            }
-
-            if (IsDraggingSelection && _selectionTransform.PointerId == evt.pointerId)
-            {
-                float dx = evt.position.x - _selectionTransform.PointerStart.x;
-                float dt = dx / Mathf.Max(_pixelsPerSecond, 0.0001f);
-
-                bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
-                if (shouldSnap && TryGetSnapAdjustedDelta(_selectionTransform.Kind, dt, out var snappedDt, out _))
+                case PointerSessionMode.Marquee:
                 {
-                    dt = snappedDt;
-                }
-                else
-                {
-                    HideSnapGuide();
+                    var local = this.WorldToLocal(evt.position);
+                    var rect = UpdateMarqueeBoxRect(local);
+                    var hits = CollectMarqueeHits(rect);
+                    _selection.UpdateMarquee(hits);
+                    RefreshSelectionVisuals();
+
+                    evt.StopPropagation();
+                    return;
                 }
 
-                _selectionTransform.UpdateGhost(dt);
+                case PointerSessionMode.Scrub:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    SeekRequested?.Invoke(XToTime(local.x));
+                    evt.StopPropagation();
+                    return;
+                }
 
-                LayoutBlocksInLanes();
+                case PointerSessionMode.SelectionPress:
+                    if (!HasExceededDragThreshold(_pointerSession, evt.position))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
 
-                evt.StopPropagation();
-                return;
+                    if (BeginSelectionTransformFromPointer(_pointerSession.PointerStartWorld, evt.pointerId))
+                    {
+                        _pointerSession.Mode = PointerSessionMode.Transform;
+                        RebuildSnapTimes();
+                    }
+
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.BlockPress:
+                    if (!HasExceededDragThreshold(_pointerSession, evt.position))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
+
+                    if (_pointerSession.BlockWasSelected || (!_pointerSession.Shift && !_pointerSession.Action))
+                    {
+                        if (BeginSelectionTransformFromPointer(_pointerSession.PointerStartWorld, evt.pointerId))
+                        {
+                            _pointerSession.Mode = PointerSessionMode.Transform;
+                            RebuildSnapTimes();
+                        }
+                    }
+
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.Transform:
+                {
+                    float dx = evt.position.x - _selectionTransform.PointerStart.x;
+                    float dt = dx / Mathf.Max(_pixelsPerSecond, 0.0001f);
+
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    if (shouldSnap && TryGetSnapAdjustedDelta(_selectionTransform.Kind, dt, out var snappedDt, out _))
+                    {
+                        dt = snappedDt;
+                    }
+                    else
+                    {
+                        HideSnapGuide();
+                    }
+
+                    _selectionTransform.UpdateGhost(dt);
+
+                    LayoutBlocksInLanes();
+
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.Pan:
+                {
+                    float panDx = evt.position.x - _pointerSession.PanStartPointer.x;
+                    _viewStart = _pointerSession.PanStartView - panDx / Mathf.Max(_pixelsPerSecond, 0.0001f);
+                    RefreshLayout();
+                    evt.StopPropagation();
+                    return;
+                }
             }
-
-            if (!_panning || !this.HasPointerCapture(evt.pointerId))
-                return;
-
-            float panDx = evt.position.x - _panStartPointer.x;
-            _viewStart = _panStartView - panDx / Mathf.Max(_pixelsPerSecond, 0.0001f);
-            RefreshLayout();
-            evt.StopPropagation();
         }
 
         private void OnPointerUp(PointerUpEvent evt)
         {
-            if (_marqueeArmed && _marqueePointerId == evt.pointerId)
+            if (_pointerSession == null || _pointerSession.PointerId != evt.pointerId)
+                return;
+
+            switch (_pointerSession.Mode)
             {
-                if (_marqueeSelecting)
+                case PointerSessionMode.Marquee:
                 {
                     var local = this.WorldToLocal(evt.position);
                     var rect = UpdateMarqueeBoxRect(local);
@@ -1731,128 +1781,69 @@ namespace TimboJimboEditor.Sequencer
                     var targetSelection = _selection.GetMarqueeCommitTarget();
                     _selection.EndMarquee();
                     SelectionChanged?.Invoke(targetSelection);
+                    _marqueeBox.style.display = DisplayStyle.None;
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
                 }
-                else if (_marqueeMode == MarqueeMode.Replace)
+
+                case PointerSessionMode.BackgroundPress:
+                    if (_pointerSession.MarqueeMode == MarqueeMode.Replace)
+                        SelectionChanged?.Invoke(Array.Empty<SegmentSelectionModel>());
+
+                    _marqueeBox.style.display = DisplayStyle.None;
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.BlockPress:
+                    if (_pointerSession.BlockWasSelected)
+                        HandleBlockSelectionClick(_pointerSession.PressedBlock, _pointerSession.Shift, _pointerSession.Action);
+
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.SelectionPress:
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.Scrub:
                 {
-                    SelectionChanged?.Invoke(Array.Empty<SegmentSelectionModel>());
+                    var local = this.WorldToLocal(evt.position);
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    SeekRequested?.Invoke(SnapTime(XToTime(local.x), shouldSnap));
+
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
                 }
 
-                _marqueeArmed = false;
-                _marqueeSelecting = false;
-                _marqueePointerId = -1;
-                _marqueeBox.style.display = DisplayStyle.None;
-
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_pendingSelectedClickBlock != null && _pendingSelectedClickPointerId == evt.pointerId)
-            {
-                bool hadTransformSession = IsDraggingSelection && _selectionTransform.PointerId == evt.pointerId;
-                bool commitTransform = hadTransformSession && _selectionTransform.HasChanges;
-                bool suppressClickSelection = hadTransformSession;
-
-                if (commitTransform)
+                case PointerSessionMode.Transform:
                 {
-                    var changes = new List<(SegmentSelectionModel model, float start, float duration)>();
-                    _selectionTransform.GetCommittedChanges(changes);
-                    for (int i = 0; i < changes.Count; i++)
+                    if (_selectionTransform.HasChanges)
                     {
-                        var change = changes[i];
-                        TimeAdjustmentCommitted?.Invoke(change.model, change.start, change.duration);
+                        var changes = new List<(SegmentSelectionModel model, float start, float duration)>();
+                        _selectionTransform.GetCommittedChanges(changes);
+                        TimeAdjustmentCommitted?.Invoke(changes);
                     }
-                }
 
-                if (hadTransformSession)
-                {
                     _selectionTransform = null;
                     HideSnapGuide();
                     RefreshLayout();
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
                 }
 
-                if (_selectionTransformArmed && _selectionTransformArmPointerId == evt.pointerId)
-                    ClearSelectionTransformArm();
-
-                var pendingBlock = _pendingSelectedClickBlock;
-                var pendingShift = _pendingSelectedClickShift;
-                var pendingAction = _pendingSelectedClickAction;
-                _pendingSelectedClickBlock = null;
-                _pendingSelectedClickPointerId = -1;
-                _pendingSelectedClickShift = false;
-                _pendingSelectedClickAction = false;
-
-                if (!suppressClickSelection)
-                    HandleBlockSelectionClick(pendingBlock, pendingShift, pendingAction);
-
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_selectionTransformArmed && _selectionTransformArmPointerId == evt.pointerId)
-            {
-                ClearSelectionTransformArm();
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_scrubbingTimeline && _scrubPointerId == evt.pointerId)
-            {
-                var local = this.WorldToLocal(evt.position);
-                bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
-                SeekRequested?.Invoke(SnapTime(XToTime(local.x), shouldSnap));
-                
-                _scrubbingTimeline = false;
-                _scrubPointerId = -1;
-                
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-                evt.StopPropagation();
-                return;
-            }
-
-            if (IsDraggingSelection && _selectionTransform.PointerId == evt.pointerId)
-            {
-                if (_selectionTransform.HasChanges)
+                case PointerSessionMode.Pan:
                 {
-                    var changes = new List<(SegmentSelectionModel model, float start, float duration)>();
-                    _selectionTransform.GetCommittedChanges(changes);
-                    for (int i = 0; i < changes.Count; i++)
-                    {
-                        var change = changes[i];
-                        TimeAdjustmentCommitted?.Invoke(change.model, change.start, change.duration);
-                    }
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
                 }
-
-                _selectionTransform = null;
-                HideSnapGuide();
-                if (_pendingSelectedClickPointerId == evt.pointerId)
-                {
-                    _pendingSelectedClickBlock = null;
-                    _pendingSelectedClickPointerId = -1;
-                    _pendingSelectedClickShift = false;
-                    _pendingSelectedClickAction = false;
-                }
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-                RefreshLayout();
-                evt.StopPropagation();
-                return;
             }
-
-            if (!_panning || !this.HasPointerCapture(evt.pointerId))
-                return;
-
-            _panning = false;
-            this.ReleasePointer(evt.pointerId);
-            evt.StopPropagation();
         }
 
         private void OnKeyDown(KeyDownEvent evt)
@@ -1967,8 +1958,9 @@ namespace TimboJimboEditor.Sequencer
 
         private Rect UpdateMarqueeBoxRect(Vector2 currentLocal)
         {
-            var min = Vector2.Min(_marqueeStartLocal, currentLocal);
-            var max = Vector2.Max(_marqueeStartLocal, currentLocal);
+            var startLocal = _pointerSession != null ? _pointerSession.PointerStartLocal : currentLocal;
+            var min = Vector2.Min(startLocal, currentLocal);
+            var max = Vector2.Max(startLocal, currentLocal);
 
             _marqueeBox.style.left = min.x;
             _marqueeBox.style.top = min.y;

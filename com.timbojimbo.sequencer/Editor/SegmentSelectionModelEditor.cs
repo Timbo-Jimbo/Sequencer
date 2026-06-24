@@ -11,111 +11,145 @@ namespace TimboJimboEditor.Sequencer
     [CustomEditor(typeof(SegmentSelectionModel)), CanEditMultipleObjects]
     public sealed class SegmentSelectionModelEditor : Editor
     {
+        private readonly List<PreviewBinding> _previewBindings = new();
+
+        private sealed class PreviewBinding
+        {
+            public SegmentSelectionModel Model;
+            public VisualElement PreviewElement;
+        }
+
+        private void OnEnable()
+        {
+            Undo.undoRedoPerformed += RefreshAllPreviews;
+        }
+
+        private void OnDisable()
+        {
+            Undo.undoRedoPerformed -= RefreshAllPreviews;
+            _previewBindings.Clear();
+        }
+
         public override VisualElement CreateInspectorGUI()
         {
+            _previewBindings.Clear();
+
             var root = new VisualElement();
 
-            var allModels = targets.OfType<SegmentSelectionModel>()
+            var allModels = targets
+                .OfType<SegmentSelectionModel>()
                 .Where(m => m != null && m.Segment != null)
                 .ToList();
 
-            if (allModels.Count == 1)
+            if (allModels.Count == 0)
+                return root;
+
+            var grouped = allModels
+                .GroupBy(m => m.Segment.GetType())
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key.Name)
+                .ToList();
+
+            for (int groupIndex = 0; groupIndex < grouped.Count; groupIndex++)
             {
-                var model = allModels[0];
-                var blockEditor = SegmentBlockEditorRegistry.GetEditor(model.Segment);
+                var group = grouped[groupIndex];
+                var groupModels = group.ToList();
 
-                var previewBlock = new VisualElement
+                var typeLabel = ObjectNames.NicifyVariableName(group.Key.Name);
+                if (groupModels.Count > 1)
+                    typeLabel += "s";
+
+                var countLabel = groupModels.Count > 1 ? $"{groupModels.Count}x " : "";
+
+                root.Add(new Label($"{countLabel}{typeLabel}")
                 {
                     style =
                     {
-                        marginTop = 4f,
-                        marginBottom = 8f,
-                    }
-                };
-
-                blockEditor.OnBlockGUI(model.Segment, previewBlock);
-                root.Add(previewBlock);
-            }
-            else if (allModels.Count > 1)
-            {
-                var multiHeader = new VisualElement
-                {
-                    style =
-                    {
-                        marginTop = 4f,
-                        marginBottom = 8f,
-                    }
-                };
-
-                multiHeader.Add(new Label($"{allModels.Count} Segments Selected")
-                {
-                    style =
-                    {
-                        unityFontStyleAndWeight = FontStyle.Bold,
+                        marginTop = groupIndex > 0 ? 12f : 4f,
                         marginBottom = 6f,
+                        unityFontStyleAndWeight = FontStyle.Bold,
+                        fontSize = 12,
                     }
                 });
 
-                var grouped = allModels
-                    .GroupBy(m => m.Segment.GetType())
-                    .OrderByDescending(g => g.Count())
-                    .ThenBy(g => g.Key.Name);
-
-                foreach (var group in grouped)
+                var previewContainer = new VisualElement
                 {
-                    var representative = group.First().Segment;
-                    var blockEditor = SegmentBlockEditorRegistry.GetEditor(representative);
-                    var (fill, border) = blockEditor.GetBlockColors(representative);
+                    style =
+                    {
+                        marginBottom = 8f,
+                        position = Position.Relative,
+                        height = 56f,
+                        width = new Length(100, LengthUnit.Percent),
+                    }
+                };
 
-                    var row = new VisualElement
+                var groupPreviewBindings = new List<PreviewBinding>(groupModels.Count);
+
+                for (int i = 0; i < groupModels.Count; i++)
+                {
+                    var model = groupModels[i];
+
+                    var wrapper = new VisualElement
                     {
                         style =
                         {
-                            flexDirection = FlexDirection.Row,
-                            alignItems = Align.Center,
-                            marginBottom = 4f,
+                            position = Position.Absolute,
+                            left = i * 32f,
+                            top = 0f,
+                            right = 0f,
+                            height = 48f,
+                            backgroundColor = new Color(0.219f, 0.219f, 0.219f, 0f),
+                            borderTopLeftRadius = 4f,
+                            borderTopRightRadius = 4f,
+                            borderBottomLeftRadius = 4f,
+                            borderBottomRightRadius = 4f,
+                            
                         }
                     };
 
-                    var swatch = new VisualElement
+                    var blockPreview = new VisualElement
                     {
                         style =
                         {
-                            width = 12f,
-                            height = 12f,
-                            marginRight = 6f,
-                            backgroundColor = fill,
+                            position = Position.Relative,
+                            width = new Length(100, LengthUnit.Percent),
+                            height = 48f,
                             borderTopWidth = 1f,
                             borderBottomWidth = 1f,
                             borderLeftWidth = 1f,
                             borderRightWidth = 1f,
-                            borderTopColor = border,
-                            borderBottomColor = border,
-                            borderLeftColor = border,
-                            borderRightColor = border,
-                            borderTopLeftRadius = 2f,
-                            borderTopRightRadius = 2f,
-                            borderBottomLeftRadius = 2f,
-                            borderBottomRightRadius = 2f,
+                            borderTopLeftRadius = 4f,
+                            borderTopRightRadius = 4f,
+                            borderBottomLeftRadius = 4f,
+                            borderBottomRightRadius = 4f,
+                            overflow = Overflow.Hidden,
                         }
                     };
-                    row.Add(swatch);
 
-                    row.Add(new Label($"{group.Count()} {ObjectNames.NicifyVariableName(group.Key.Name)}")
+                    var previewBinding = new PreviewBinding
                     {
-                        style =
-                        {
-                            unityFontStyleAndWeight = FontStyle.Normal,
-                        }
-                    });
+                        Model = model,
+                        PreviewElement = blockPreview,
+                    };
 
-                    multiHeader.Add(row);
+                    groupPreviewBindings.Add(previewBinding);
+                    _previewBindings.Add(previewBinding);
+
+                    RefreshPreview(previewBinding);
+
+                    if (i > 0)
+                    {
+                        wrapper.Add(CreateOverlapSeamShadow());
+                    }
+
+                    wrapper.Add(blockPreview);
+                    previewContainer.Add(wrapper);
                 }
 
-                root.Add(multiHeader);
+                root.Add(previewContainer);
+                root.Add(new IMGUIContainer(() => DrawGroupInspector(groupModels, groupPreviewBindings)));
             }
 
-            root.Add(new IMGUIContainer(DrawInspectorBody));
             return root;
         }
 
@@ -124,50 +158,107 @@ namespace TimboJimboEditor.Sequencer
             // Intentionally blank: header is rendered in CreateInspectorGUI.
         }
 
-        public override void OnInspectorGUI() => DrawInspectorBody();
-
-        private void DrawInspectorBody()
+        private void DrawGroupInspector(IReadOnlyList<SegmentSelectionModel> groupModels, IReadOnlyList<PreviewBinding> previewBindings)
         {
-            var allModels = targets.OfType<SegmentSelectionModel>()
-                .Where(m => m != null && m.Segment != null && m.Handle.Provider != null)
-                .ToList();
-
-            if (allModels.Count == 0)
-            {
-                EditorGUILayout.HelpBox("No segment selection models are active.", MessageType.Info);
+            if (groupModels.Count == 0)
                 return;
-            }
 
-            var grouped = allModels.GroupBy(m => m.Segment.GetType());
-            foreach (var group in grouped)
+            var groupType = groupModels[0].Segment.GetType();
+            var groupObjects = groupModels.Cast<UnityEngine.Object>().ToArray();
+
+            using var groupSo = new SerializedObject(groupObjects);
+            groupSo.Update();
+
+            var segmentProp = groupSo.FindProperty("Segment");
+            var segmentInspector = SegmentInspectorRegistry.GetInspectorByType(groupType);
+            segmentInspector.OnInspectorGUI(segmentProp);
+
+            if (groupSo.ApplyModifiedProperties())
             {
-                if (grouped.Count() > 1)
-                {
-                    EditorGUILayout.Space(4f);
-                    EditorGUILayout.LabelField(ObjectNames.NicifyVariableName(group.Key.Name), EditorStyles.boldLabel);
-                }
-
-                var groupModels = group.ToList();
-                var groupObjects = groupModels.Cast<UnityEngine.Object>().ToArray();
-                using var groupSo = new SerializedObject(groupObjects);
-                groupSo.Update();
-
-                var segmentProp = groupSo.FindProperty("Segment");
-                var segmentInspector = SegmentInspectorRegistry.GetInspectorByType(group.Key);
-                segmentInspector.OnInspectorGUI(segmentProp);
-
-                if (!groupSo.ApplyModifiedProperties())
-                    continue;
-                SyncModelsBackToProviders(groupModels);
+                TimelineSessionState.CommitChanges(groupModels);
+                RefreshPreviews(previewBindings);
             }
         }
 
-        private static void SyncModelsBackToProviders(IReadOnlyList<SegmentSelectionModel> models)
+        private void RefreshAllPreviews()
         {
-            for (int i = 0; i < models.Count; i++)
+            RefreshPreviews(_previewBindings);
+            Repaint();
+        }
+
+        private static void RefreshPreviews(IReadOnlyList<PreviewBinding> previewBindings)
+        {
+            for (int i = 0; i < previewBindings.Count; i++)
             {
-                models[i]?.CommitToProvider();
+                RefreshPreview(previewBindings[i]);
             }
+        }
+
+        private static void RefreshPreview(PreviewBinding binding)
+        {
+            if (binding?.PreviewElement == null)
+                return;
+
+            var blockPreview = binding.PreviewElement;
+            blockPreview.Clear();
+
+            var segment = binding.Model?.Segment;
+            if (segment == null)
+                return;
+
+            var blockEditor = SegmentBlockEditorRegistry.GetEditor(segment);
+            var (fill, border) = blockEditor.GetBlockColors(segment);
+
+            blockPreview.style.backgroundColor = fill;
+            blockPreview.style.borderTopColor = border;
+            blockPreview.style.borderBottomColor = border;
+            blockPreview.style.borderLeftColor = border;
+            blockPreview.style.borderRightColor = border;
+
+            blockEditor.OnBlockGUI(segment, blockPreview);
+            blockPreview.MarkDirtyRepaint();
+        }
+
+        private static VisualElement CreateOverlapSeamShadow()
+        {
+            const float shadowWidth = 64f;
+            var shadow = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    left = -shadowWidth,
+                    top = 1f,
+                    width = shadowWidth,
+                    bottom = 1f,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+
+            shadow.generateVisualContent += mgc => DrawOverlapSeamShadow(mgc, shadow.contentRect.width, shadow.contentRect.height);
+            return shadow;
+        }
+
+        private static void DrawOverlapSeamShadow(MeshGenerationContext mgc, float width, float height)
+        {
+            if (width <= 0f || height <= 0f)
+                return;
+
+            var mesh = mgc.Allocate(4, 6);
+            var farColor = new Color(0f, 0f, 0f, 0f);
+            var nearColor = new Color(0.000f, 0.000f, 0.000f, 0.123f);
+
+            mesh.SetNextVertex(new Vertex { position = new Vector3(0f, 0f, Vertex.nearZ), tint = farColor });
+            mesh.SetNextVertex(new Vertex { position = new Vector3(width, 0f, Vertex.nearZ), tint = nearColor });
+            mesh.SetNextVertex(new Vertex { position = new Vector3(width, height, Vertex.nearZ), tint = nearColor });
+            mesh.SetNextVertex(new Vertex { position = new Vector3(0f, height, Vertex.nearZ), tint = farColor });
+
+            mesh.SetNextIndex(0);
+            mesh.SetNextIndex(1);
+            mesh.SetNextIndex(2);
+            mesh.SetNextIndex(2);
+            mesh.SetNextIndex(3);
+            mesh.SetNextIndex(0);
         }
     }
 }

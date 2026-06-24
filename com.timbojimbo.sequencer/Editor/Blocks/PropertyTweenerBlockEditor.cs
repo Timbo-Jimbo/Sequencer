@@ -21,6 +21,10 @@ namespace TimboJimboEditor.Sequencer.Blocks
                     flexDirection = FlexDirection.Row,
                     alignItems = Align.FlexStart,
                     overflow = Overflow.Hidden,
+                    marginLeft = 4f,
+                    marginRight = 4f,
+                    marginTop = 2f,
+                    marginBottom = 2f,
                 },
                 pickingMode = PickingMode.Ignore,
             };

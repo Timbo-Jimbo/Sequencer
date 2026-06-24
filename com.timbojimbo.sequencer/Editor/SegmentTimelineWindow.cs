@@ -9,7 +9,6 @@ using TimboJimbo.PropertyBindings;
 using TimboJimboEditor.PropertyBindings.Utility;
 using UnityEditor.SceneManagement;
 using TimboJimbo.Sequencer;
-using TimboJimbo.Sequencer.Segments;
 using TimboJimboEditor.Sequencer.Recorders;
 
 namespace TimboJimboEditor.Sequencer
@@ -58,7 +57,7 @@ namespace TimboJimboEditor.Sequencer
 
         private bool IsPreviewing => _previewSession != null;
         private bool IsRecording => _editTracker != null;
-        private SequenceProvider Provider => _sessionState?.Provider;
+        public SequenceProvider Provider => _sessionState?.Provider;
 
         [MenuItem("Window/Segment Timeline")]
         public static void OpenFromMenu() => Open(Selection.activeGameObject != null
@@ -271,7 +270,7 @@ namespace TimboJimboEditor.Sequencer
             UpdatePreviewVisuals();
         }
 
-        private void RefreshPlan()
+        public void RefreshPlan()
         {
             if (Provider == null)
             {
@@ -337,6 +336,7 @@ namespace TimboJimboEditor.Sequencer
             try
             {
                 Selection.objects = selected.Cast<UnityEngine.Object>().ToArray();
+                SyncCanvasSelection();
             }
             finally
             {
@@ -344,14 +344,9 @@ namespace TimboJimboEditor.Sequencer
             }
         }
 
-        private void OnTimeAdjustmentCommitted(SegmentSelectionModel model, float newStart, float newDuration)
+        private void OnTimeAdjustmentCommitted(IReadOnlyList<(SegmentSelectionModel model, float start, float duration)> changes)
         {
-            if (model == null)
-                return;
-
-            model.StartTime = newStart;
-            model.Duration = newDuration;
-            model.CommitToProvider();
+            _sessionState.UpdateProxyTimings(changes);
         }
 
         private void OnDeleteRequested(IReadOnlyList<SegmentSelectionModel> selectedModels)
@@ -682,7 +677,7 @@ namespace TimboJimboEditor.Sequencer
                 var associatedModel = _sessionState.Models.Find(m => ReferenceEquals(m.Segment, consumingSegment));
                 if (associatedModel != null)
                 {
-                    associatedModel.CommitToProvider();
+                    TimelineSessionState.CommitChanges(new[] { associatedModel });
                     Selection.objects = new[] { associatedModel };
                     SyncCanvasSelection();
                 }

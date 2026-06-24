@@ -10,6 +10,12 @@ namespace TimboJimboEditor.Sequencer
         [SerializeField]
         private SegmentHandle _handle;
 
+        [SerializeField]
+        private float _resolvedStartTime;
+        
+        [SerializeField]
+        private float _resolvedDuration;
+
         public SegmentHandle Handle
         {
             get => _handle;
@@ -21,26 +27,26 @@ namespace TimboJimboEditor.Sequencer
 
         public float StartTime
         {
-            get => Segment is IStartTimeConfigurable st ? st.GetStartTime() : 0f;
+            get => _resolvedStartTime;
             set
             {
                 if (Segment is IStartTimeConfigurable st)
                 {
-                    Undo.RecordObject(this, "Adjust Timing");
                     st.SetStartTime(Mathf.Max(0f, value));
+                    _resolvedStartTime = st.GetStartTime();
                 }
             }
         }
 
         public float Duration
         {
-            get => Segment is IDurationConfigurable dur ? dur.GetDuration() : 0f;
+            get => _resolvedDuration;
             set
             {
                 if (Segment is IDurationConfigurable dur)
                 {
-                    Undo.RecordObject(this, "Adjust Duration");
                     dur.SetDuration(Mathf.Max(0.01f, value));
+                    _resolvedDuration = dur.GetDuration();
                 }
             }
         }
@@ -50,18 +56,25 @@ namespace TimboJimboEditor.Sequencer
         public bool CanAdjustStartTime => Segment is IStartTimeConfigurable;
         public bool CanAdjustDuration => Segment is IDurationConfigurable;
 
-        public void InitializeFrom(SequenceProvider sourceProvider, Segment segment, int index)
+        public void Bind(SequenceProvider sourceProvider, Segment segment, int index)
         {
             Handle = new SegmentHandle(sourceProvider, index);
             Segment = JsonUtility.FromJson(JsonUtility.ToJson(segment), segment.GetType()) as Segment;
+            ResolveTimingFromPlan();
             RefreshDisplayName();
         }
 
-        public void RefreshFrom(SequenceProvider sourceProvider, Segment segment, int index)
+        private void ResolveTimingFromPlan()
         {
-            Handle = new SegmentHandle(sourceProvider, index);
-            Segment = JsonUtility.FromJson(JsonUtility.ToJson(segment), segment.GetType()) as Segment;
-            RefreshDisplayName();
+            if (Segment == null)
+                return;
+
+            var plan = Segment.GetPlan(null);
+            if (plan == null)
+                return;
+                
+            _resolvedStartTime = plan.Timing.AbsoluteStartTime;
+            _resolvedDuration = plan.Timing.AbsoluteDuration;
         }
 
         public void RefreshDisplayName()
@@ -74,29 +87,6 @@ namespace TimboJimboEditor.Sequencer
 
             var nicifiedType = ObjectNames.NicifyVariableName(Segment.GetType().Name);
             name = $"{nicifiedType} (Index {Handle.Index})";
-        }
-
-        public void CommitToProvider()
-        {
-            if (Handle.Provider == null)
-                return;
-
-            Undo.RecordObject(Handle.Provider, "Edit Segment");
-
-            using var providerSo = new SerializedObject(Handle.Provider);
-            providerSo.Update();
-
-            var targetProp = providerSo.FindProperty(Handle.PropertyPath);
-            if (targetProp != null)
-            {
-                targetProp.boxedValue = Segment;
-                if (providerSo.ApplyModifiedProperties())
-                {
-                    EditorUtility.SetDirty(Handle.Provider);
-                    PrefabUtility.RecordPrefabInstancePropertyModifications(Handle.Provider);
-                    SegmentTimelineWindow.NotifyProviderChanged(Handle.Provider);
-                }
-            }
         }
     }
 }

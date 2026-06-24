@@ -128,7 +128,7 @@ namespace TimboJimboEditor.Sequencer
         private void DrawInspectorBody()
         {
             var allModels = targets.OfType<SegmentSelectionModel>()
-                .Where(m => m != null && m.Segment != null && m.SourceProvider != null && !string.IsNullOrEmpty(m.SourcePropertyPath))
+                .Where(m => m != null && m.Segment != null && m.Handle.Provider != null)
                 .ToList();
 
             if (allModels.Count == 0)

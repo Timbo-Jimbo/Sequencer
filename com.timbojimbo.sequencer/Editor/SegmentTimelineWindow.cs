@@ -228,7 +228,7 @@ namespace TimboJimboEditor.Sequencer
                 return;
 
             var selectedModels = Selection.objects.OfType<SegmentSelectionModel>().ToList();
-            var modelProvider = selectedModels.FirstOrDefault(m => m != null && m.SourceProvider != null)?.SourceProvider;
+            var modelProvider = selectedModels.FirstOrDefault(m => m != null && m.Handle.Provider != null)?.Handle.Provider;
 
             var selectedGo = Selection.activeGameObject;
             var selectedGoProvider = selectedGo != null ? selectedGo.GetComponentInParent<SequenceProvider>() : null;
@@ -296,7 +296,7 @@ namespace TimboJimboEditor.Sequencer
 
             // Keep selection perfectly in sync
             var currentSelectedModels = Selection.objects.OfType<SegmentSelectionModel>()
-                .Where(m => ReferenceEquals(m.SourceProvider, Provider))
+                .Where(m => ReferenceEquals(m.Handle.Provider, Provider))
                 .ToList();
 
             _canvas.SetView(_sessionState.Models, currentSelectedModels);
@@ -321,7 +321,7 @@ namespace TimboJimboEditor.Sequencer
                 return;
 
             var activeSelected = Selection.objects.OfType<SegmentSelectionModel>()
-                .Where(m => ReferenceEquals(m.SourceProvider, Provider))
+                .Where(m => ReferenceEquals(m.Handle.Provider, Provider))
                 .ToList();
 
             _canvas.SetSelection(activeSelected);

@@ -32,14 +32,26 @@ namespace TimboJimboEditor.Sequencer
 
             var activeLayer = Provider.Sequence.Segments;
             
-            // Build dictionary of current selection models by path
-            var existingByPath = new Dictionary<string, SegmentSelectionModel>();
+            // Build dictionary of unique resurrected/existing selection models by index
+            var existingByIndex = new Dictionary<int, SegmentSelectionModel>();
+
+            // 1) Read from existing session Models
             for (int i = 0; i < Models.Count; i++)
             {
                 var m = Models[i];
-                if (m != null && !string.IsNullOrEmpty(m.SourcePropertyPath))
+                if (m != null && ReferenceEquals(m.Handle.Provider, Provider))
                 {
-                    existingByPath[m.SourcePropertyPath] = m;
+                    existingByIndex[m.Handle.Index] = m;
+                }
+            }
+
+            // 2) Read from active Unity selection (essential to capture undo-resurrected instances)
+            var currentSelections = Selection.objects.OfType<SegmentSelectionModel>();
+            foreach (var m in currentSelections)
+            {
+                if (m != null && m.Handle.Provider == Provider)
+                {
+                    existingByIndex[m.Handle.Index] = m;
                 }
             }
 
@@ -51,27 +63,23 @@ namespace TimboJimboEditor.Sequencer
                 if (segment == null)
                     continue;
 
-                string path = $"Sequence.Segments.Array.data[{i}]";
-
-                if (existingByPath.TryGetValue(path, out var reused) && reused != null)
+                if (existingByIndex.TryGetValue(i, out var reused) && reused != null)
                 {
-                    reused.RefreshFrom(Provider, segment, path);
+                    reused.RefreshFrom(Provider, segment, i);
                     nextModels.Add(reused);
-                    existingByPath.Remove(path);
+                    existingByIndex.Remove(i);
                 }
                 else
                 {
                     var model = ScriptableObject.CreateInstance<SegmentSelectionModel>();
                     model.hideFlags = HideFlags.DontSave;
-                    model.InitializeFrom(Provider, segment, path);
+                    model.InitializeFrom(Provider, segment, i);
                     nextModels.Add(model);
                 }
             }
 
-            // Cleanup any models that represent elements which are no longer in the array
-            // Note: During an explicit Delete operation, those models were already destroyed via Undo.DestroyObjectImmediate,
-            // so they are already null/missing. But other changes (like normal provider syncs) clean up safely here.
-            foreach (var stale in existingByPath.Values)
+            // Cleanup stale models that don't match any index anymore
+            foreach (var stale in existingByIndex.Values)
             {
                 if (stale != null)
                 {
@@ -134,25 +142,49 @@ namespace TimboJimboEditor.Sequencer
             List<int> deletedIndices = new List<int>();
             HashSet<Segment> targetsToDelete = new HashSet<Segment>();
 
-            foreach (var model in segmentModels)
+            foreach (var m in segmentModels)
             {
-                if (model == null) continue;
-                int index = GetIndexFromPath(model.SourcePropertyPath);
-                if (index >= 0)
+                if (m == null) continue;
+                int index = m.Handle.Index;
+                if (index >= 0 && index < Provider.Sequence.Segments.Count)
                 {
                     deletedIndices.Add(index);
-                    if (index < Provider.Sequence.Segments.Count)
-                    {
-                        targetsToDelete.Add(Provider.Sequence.Segments[index]);
-                    }
+                    targetsToDelete.Add(Provider.Sequence.Segments[index]);
                 }
             }
 
             if (targetsToDelete.Count == 0)
                 return;
 
-            // Shift model paths of remaining models before deleting elements
-            ShiftModelPathsForDelete(deletedIndices);
+            // Sort deleted indices ascending so we can calculate shifts deterministically
+            deletedIndices.Sort();
+
+            // Record Undo and apply index shifting for each surviving model
+            foreach (var model in Models)
+            {
+                if (model == null) continue;
+                int oldIndex = model.Handle.Index;
+                
+                // Only shift surviving models
+                if (!deletedIndices.Contains(oldIndex))
+                {
+                    int shift = 0;
+                    foreach (int deletedIdx in deletedIndices)
+                    {
+                        if (deletedIdx < oldIndex)
+                        {
+                            shift++;
+                        }
+                    }
+
+                    if (shift > 0)
+                    {
+                        Undo.RecordObject(model, "Delete Segments");
+                        model.Handle = new SegmentHandle(Provider, oldIndex - shift);
+                        model.RefreshDisplayName();
+                    }
+                }
+            }
 
             // Record Undo for the provider
             Undo.RecordObject(Provider, "Delete Segments");
@@ -180,40 +212,6 @@ namespace TimboJimboEditor.Sequencer
             PrefabUtility.RecordPrefabInstancePropertyModifications(Provider);
 
             Refresh();
-        }
-
-        private void ShiftModelPathsForDelete(List<int> deletedIndices)
-        {
-            deletedIndices.Sort((a, b) => b.CompareTo(a)); // Sort descending
-            foreach (var deletedIndex in deletedIndices)
-            {
-                for (int i = 0; i < Models.Count; i++)
-                {
-                    var model = Models[i];
-                    if (model == null) continue;
-                    
-                    int modelIndex = GetIndexFromPath(model.SourcePropertyPath);
-                    if (modelIndex > deletedIndex)
-                    {
-                        model.SourcePropertyPath = $"Sequence.Segments.Array.data[{modelIndex - 1}]";
-                        model.RefreshDisplayName();
-                    }
-                }
-            }
-        }
-
-        private int GetIndexFromPath(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-                return -1;
-            int openBracket = path.LastIndexOf('[');
-            int closeBracket = path.LastIndexOf(']');
-            if (openBracket >= 0 && closeBracket > openBracket)
-            {
-                if (int.TryParse(path.Substring(openBracket + 1, closeBracket - openBracket - 1), out int index))
-                    return index;
-            }
-            return -1;
         }
 
         public List<Segment> TryPaste(IReadOnlyList<SegmentTimelineWindow.ClipboardEntry> clipboard, float displayTime, bool isPreviewing)

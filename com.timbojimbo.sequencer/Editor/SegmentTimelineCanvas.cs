@@ -175,9 +175,8 @@ namespace TimboJimboEditor.Sequencer
 
         private sealed class SelectionState
         {
-            private readonly List<SegmentSelectionModel> _concrete = new();
-            private readonly List<SegmentSelectionModel> _transient = new();
-            private readonly List<SegmentSelectionModel> _active = new();
+            private readonly List<SegmentSelectionModel> _concrete = new(); 
+            private readonly List<SegmentSelectionModel> _active = new();     
             private readonly List<SegmentSelectionModel> _marqueeBase = new();
             private readonly List<SegmentSelectionModel> _marqueeCurrent = new();
             private bool _marqueeActive;
@@ -203,77 +202,71 @@ namespace TimboJimboEditor.Sequencer
                         AddUnique(_concrete, selectedModels[i]);
                 }
 
-                _transient.Clear();
                 RebuildActiveSelection();
             }
 
             public void Clear()
             {
                 _concrete.Clear();
-                _transient.Clear();
                 _marqueeBase.Clear();
                 _marqueeCurrent.Clear();
                 _marqueeActive = false;
                 _active.Clear();
             }
 
-            public void ClickSingle(SegmentSelectionModel clicked)
+            public List<SegmentSelectionModel> GetClickSingleTarget(SegmentSelectionModel clicked)
             {
-                _transient.Clear();
-                _concrete.Clear();
-                AddUnique(_concrete, clicked);
-                RebuildActiveSelection();
+                var list = new List<SegmentSelectionModel>();
+                if (clicked != null)
+                    list.Add(clicked);
+                return list;
             }
 
-            public void CtrlClick(SegmentSelectionModel clicked)
+            public List<SegmentSelectionModel> GetCtrlClickTarget(SegmentSelectionModel clicked)
             {
-                CommitTransientToConcrete();
-                Toggle(_concrete, clicked);
-                RebuildActiveSelection();
+                var list = new List<SegmentSelectionModel>(_concrete);
+                Toggle(list, clicked);
+                return list;
             }
 
-            public void ShiftClick(SegmentSelectionModel clicked, IReadOnlyList<PlanBlock> blocks)
+            public List<SegmentSelectionModel> GetShiftClickTarget(SegmentSelectionModel clicked, IReadOnlyList<PlanBlock> blocks)
             {
+                var list = new List<SegmentSelectionModel>();
                 if (clicked == null)
-                    return;
+                    return list;
 
                 if (_concrete.Count == 0)
                 {
-                    ClickSingle(clicked);
-                    return;
+                    list.Add(clicked);
+                    return list;
                 }
 
                 var anchor = _concrete[^1];
                 if (!TryGetBlockByModel(anchor, blocks, out var anchorBlock) ||
                     !TryGetBlockByModel(clicked, blocks, out var clickedBlock))
                 {
-                    ClickSingle(clicked);
-                    return;
+                    list.Add(clicked);
+                    return list;
                 }
 
                 var marquee = BuildMarqueeFromLayoutRects(anchorBlock.LayoutRect, clickedBlock.LayoutRect);
 
-                _transient.Clear();
+                list.AddRange(_concrete);
                 for (int i = 0; i < blocks.Count; i++)
                 {
                     var candidate = blocks[i];
                     if (candidate == null || candidate.Model == null)
                         continue;
 
-                    if (candidate.LayoutRect.Overlaps(marquee) && !_concrete.Contains(candidate.Model))
-                        AddUnique(_transient, candidate.Model);
+                    if (candidate.LayoutRect.Overlaps(marquee))
+                        AddUnique(list, candidate.Model);
                 }
 
-                if (_transient.Count == 0 && !_concrete.Contains(clicked))
-                    AddUnique(_transient, clicked);
-
-                RebuildActiveSelection();
+                return list;
             }
 
             public void BeginMarquee(MarqueeMode mode)
             {
-                CommitTransientToConcrete();
-
                 _marqueeBase.Clear();
                 _marqueeCurrent.Clear();
                 _marqueeActive = true;
@@ -316,50 +309,42 @@ namespace TimboJimboEditor.Sequencer
                 RebuildActiveSelection();
             }
 
-            public void EndMarquee(bool commit)
+            public List<SegmentSelectionModel> GetMarqueeCommitTarget()
             {
                 if (!_marqueeActive)
-                    return;
+                    return new List<SegmentSelectionModel>(_concrete);
 
-                if (commit)
+                var list = new List<SegmentSelectionModel>();
+                if (_marqueeMode == MarqueeMode.Replace)
                 {
-                    _concrete.Clear();
-
-                    if (_marqueeMode == MarqueeMode.Replace)
+                    for (int i = 0; i < _marqueeCurrent.Count; i++)
+                        AddUnique(list, _marqueeCurrent[i]);
+                }
+                else if (_marqueeMode == MarqueeMode.Additive)
+                {
+                    for (int i = 0; i < _marqueeBase.Count; i++)
+                        AddUnique(list, _marqueeBase[i]);
+                    for (int i = 0; i < _marqueeCurrent.Count; i++)
+                        AddUnique(list, _marqueeCurrent[i]);
+                }
+                else // Subtractive
+                {
+                    for (int i = 0; i < _marqueeBase.Count; i++)
                     {
-                        for (int i = 0; i < _marqueeCurrent.Count; i++)
-                            AddUnique(_concrete, _marqueeCurrent[i]);
-                    }
-                    else if (_marqueeMode == MarqueeMode.Additive)
-                    {
-                        for (int i = 0; i < _marqueeBase.Count; i++)
-                            AddUnique(_concrete, _marqueeBase[i]);
-                        for (int i = 0; i < _marqueeCurrent.Count; i++)
-                            AddUnique(_concrete, _marqueeCurrent[i]);
-                    }
-                    else // Subtractive
-                    {
-                        for (int i = 0; i < _marqueeBase.Count; i++)
-                        {
-                            var candidate = _marqueeBase[i];
-                            if (!_marqueeCurrent.Contains(candidate))
-                                AddUnique(_concrete, candidate);
-                        }
+                        var candidate = _marqueeBase[i];
+                        if (!_marqueeCurrent.Contains(candidate))
+                            AddUnique(list, candidate);
                     }
                 }
+                return list;
+            }
 
+            public void EndMarquee()
+            {
                 _marqueeBase.Clear();
                 _marqueeCurrent.Clear();
                 _marqueeActive = false;
                 RebuildActiveSelection();
-            }
-
-            private void CommitTransientToConcrete()
-            {
-                for (int i = 0; i < _transient.Count; i++)
-                    AddUnique(_concrete, _transient[i]);
-
-                _transient.Clear();
             }
 
             private void RebuildActiveSelection()
@@ -394,9 +379,6 @@ namespace TimboJimboEditor.Sequencer
 
                 for (int i = 0; i < _concrete.Count; i++)
                     AddUnique(_active, _concrete[i]);
-
-                for (int i = 0; i < _transient.Count; i++)
-                    AddUnique(_active, _transient[i]);
             }
 
             private static void Toggle(List<SegmentSelectionModel> list, SegmentSelectionModel model)
@@ -1025,16 +1007,15 @@ namespace TimboJimboEditor.Sequencer
             if (clickedBlock?.Model == null)
                 return;
 
+            List<SegmentSelectionModel> targetSelection;
             if (shift)
-                _selection.ShiftClick(clickedBlock.Model, _blocks);
+                targetSelection = _selection.GetShiftClickTarget(clickedBlock.Model, _blocks);
             else if (action)
-                _selection.CtrlClick(clickedBlock.Model);
+                targetSelection = _selection.GetCtrlClickTarget(clickedBlock.Model);
             else
-                _selection.ClickSingle(clickedBlock.Model);
+                targetSelection = _selection.GetClickSingleTarget(clickedBlock.Model);
 
-            RebuildSnapTimes();
-            RefreshSelectionVisuals();
-            SelectionChanged?.Invoke(_selection.ActiveSelection);
+            SelectionChanged?.Invoke(targetSelection);
         }
 
         private void FrameAllInternal()
@@ -1673,7 +1654,6 @@ namespace TimboJimboEditor.Sequencer
                 var hits = CollectMarqueeHits(rect);
                 _selection.UpdateMarquee(hits);
                 RefreshSelectionVisuals();
-                SelectionChanged?.Invoke(_selection.ActiveSelection);
 
                 evt.StopPropagation();
                 return;
@@ -1746,17 +1726,14 @@ namespace TimboJimboEditor.Sequencer
                     var rect = UpdateMarqueeBoxRect(local);
                     var hits = CollectMarqueeHits(rect);
                     _selection.UpdateMarquee(hits);
-                    _selection.EndMarquee(commit: true);
-                    RebuildSnapTimes();
-                    RefreshSelectionVisuals();
-                    SelectionChanged?.Invoke(_selection.ActiveSelection);
+                    
+                    var targetSelection = _selection.GetMarqueeCommitTarget();
+                    _selection.EndMarquee();
+                    SelectionChanged?.Invoke(targetSelection);
                 }
                 else if (_marqueeMode == MarqueeMode.Replace)
                 {
-                    _selection.Clear();
-                    RebuildSnapTimes();
-                    RefreshSelectionVisuals();
-                    SelectionChanged?.Invoke(_selection.ActiveSelection);
+                    SelectionChanged?.Invoke(Array.Empty<SegmentSelectionModel>());
                 }
 
                 _marqueeArmed = false;

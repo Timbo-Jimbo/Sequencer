@@ -7,11 +7,14 @@ namespace TimboJimboEditor.Sequencer
 {
     public sealed class SegmentSelectionModel : ScriptableObject
     {
-        [NonSerialized]
-        public SequenceProvider SourceProvider;
+        [SerializeField]
+        private SegmentHandle _handle;
 
-        [NonSerialized]
-        public string SourcePropertyPath;
+        public SegmentHandle Handle
+        {
+            get => _handle;
+            set => _handle = value;
+        }
 
         [SerializeReference]
         public Segment Segment = new TimboJimbo.Sequencer.Segments.Sequence();
@@ -47,19 +50,16 @@ namespace TimboJimboEditor.Sequencer
         public bool CanAdjustStartTime => Segment is IStartTimeConfigurable;
         public bool CanAdjustDuration => Segment is IDurationConfigurable;
 
-        public void InitializeFrom(SequenceProvider sourceProvider, Segment segment, string sourcePropertyPath)
+        public void InitializeFrom(SequenceProvider sourceProvider, Segment segment, int index)
         {
-            SourceProvider = sourceProvider;
-            SourcePropertyPath = sourcePropertyPath;
-            // Use deep JSON copy of segment into ScriptableObject so mutations are local to proxy
+            Handle = new SegmentHandle(sourceProvider, index);
             Segment = JsonUtility.FromJson(JsonUtility.ToJson(segment), segment.GetType()) as Segment;
             RefreshDisplayName();
         }
 
-        public void RefreshFrom(SequenceProvider sourceProvider, Segment segment, string sourcePropertyPath)
+        public void RefreshFrom(SequenceProvider sourceProvider, Segment segment, int index)
         {
-            SourceProvider = sourceProvider;
-            SourcePropertyPath = sourcePropertyPath;
+            Handle = new SegmentHandle(sourceProvider, index);
             Segment = JsonUtility.FromJson(JsonUtility.ToJson(segment), segment.GetType()) as Segment;
             RefreshDisplayName();
         }
@@ -73,35 +73,28 @@ namespace TimboJimboEditor.Sequencer
             }
 
             var nicifiedType = ObjectNames.NicifyVariableName(Segment.GetType().Name);
-            if (string.IsNullOrEmpty(SourcePropertyPath))
-            {
-                name = nicifiedType;
-                return;
-            }
-
-            name = $"{nicifiedType} ({SourcePropertyPath})";
+            name = $"{nicifiedType} (Index {Handle.Index})";
         }
 
         public void CommitToProvider()
         {
-            if (SourceProvider == null || string.IsNullOrEmpty(SourcePropertyPath))
+            if (Handle.Provider == null)
                 return;
 
-            // Mutate provider inside the current Undo group
-            Undo.RecordObject(SourceProvider, "Edit Segment");
+            Undo.RecordObject(Handle.Provider, "Edit Segment");
 
-            using var providerSo = new SerializedObject(SourceProvider);
+            using var providerSo = new SerializedObject(Handle.Provider);
             providerSo.Update();
 
-            var targetProp = providerSo.FindProperty(SourcePropertyPath);
+            var targetProp = providerSo.FindProperty(Handle.PropertyPath);
             if (targetProp != null)
             {
                 targetProp.boxedValue = Segment;
                 if (providerSo.ApplyModifiedProperties())
                 {
-                    EditorUtility.SetDirty(SourceProvider);
-                    PrefabUtility.RecordPrefabInstancePropertyModifications(SourceProvider);
-                    SegmentTimelineWindow.NotifyProviderChanged(SourceProvider);
+                    EditorUtility.SetDirty(Handle.Provider);
+                    PrefabUtility.RecordPrefabInstancePropertyModifications(Handle.Provider);
+                    SegmentTimelineWindow.NotifyProviderChanged(Handle.Provider);
                 }
             }
         }

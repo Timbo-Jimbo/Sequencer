@@ -3,7 +3,7 @@ using TimboJimbo.Sequencer;
 using TimboJimbo.Sequencer.Segments;
 using UnityEngine;
 
-namespace TimboJimboEditor.Sequencer.Segments
+namespace TimboJimboEditor.Sequencer.Recorders
 {
     [CustomSegmentRecorder(typeof(PropertyTweener))]
     public sealed class PropertyTweenerRecorder : SegmentRecorder

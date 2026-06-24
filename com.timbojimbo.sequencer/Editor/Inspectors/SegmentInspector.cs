@@ -4,13 +4,10 @@ using UnityEditor;
 namespace TimboJimboEditor.Sequencer
 {
     [AttributeUsage(AttributeTargets.Class, Inherited = false)]
-    public sealed class CustomSegmentInspectorAttribute : Attribute
+    public sealed class CustomSegmentInspectorAttribute : EditorExtensionAttribute
     {
-        public Type InspectedType { get; }
-
-        public CustomSegmentInspectorAttribute(Type inspectedType)
+        public CustomSegmentInspectorAttribute(Type inspectedType) : base(inspectedType)
         {
-            InspectedType = inspectedType;
         }
     }
 

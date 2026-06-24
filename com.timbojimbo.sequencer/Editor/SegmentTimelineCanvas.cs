@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using TimboJimbo.Sequencer;
+using TimboJimboEditor.Sequencer.Blocks;
 using UnityEngine;
 using UnityEngine.Pool;
 using UnityEngine.UIElements;
@@ -1224,7 +1225,7 @@ namespace TimboJimboEditor.Sequencer
 
         private void LayoutBlocksInLanes()
         {
-            var packed = TimelineEditorUtility.PackIntoLanes(
+            var packed = LanePackingUtility.PackIntoLanes(
                 _blocks,
                 itemStart: block =>
                 {

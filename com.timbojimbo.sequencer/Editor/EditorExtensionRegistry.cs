@@ -4,22 +4,21 @@ using UnityEditor;
 
 namespace TimboJimboEditor.Sequencer
 {
+    public abstract class EditorExtensionAttribute : Attribute
+    {
+        public Type InspectedType { get; }
+
+        protected EditorExtensionAttribute(Type inspectedType)
+        {
+            InspectedType = inspectedType;
+        }
+    }
+
     public static class EditorExtensionRegistry<TAttr, TBase> 
-        where TAttr : Attribute 
+        where TAttr : EditorExtensionAttribute 
         where TBase : class
     {
         private static Dictionary<Type, Type> _cachedTypes;
-        private static readonly Func<TAttr, Type> _getInspectedType;
-
-        static EditorExtensionRegistry()
-        {
-            // Dynamically fetch 'InspectedType' property from custom attributes
-            var prop = typeof(TAttr).GetProperty("InspectedType", typeof(Type));
-            if (prop != null)
-            {
-                _getInspectedType = attr => prop.GetValue(attr) as Type;
-            }
-        }
 
         private static void EnsureRegistry()
         {
@@ -34,15 +33,19 @@ namespace TimboJimboEditor.Sequencer
                     continue;
 
                 var attributes = (TAttr[])extType.GetCustomAttributes(typeof(TAttr), false);
-                if (attributes.Length > 0 && _getInspectedType != null)
+                if (attributes.Length > 0)
                 {
-                    var inspectedType = _getInspectedType(attributes[0]);
+                    var inspectedType = attributes[0].InspectedType;
                     if (inspectedType != null)
-                    {
                         _cachedTypes[inspectedType] = extType;
-                    }
                 }
             }
+        }
+
+        public static bool HasAnyExtensions()
+        {
+            EnsureRegistry();
+            return _cachedTypes.Count > 0;
         }
 
         public static bool TryGetExtension(Type entityType, out TBase extension)

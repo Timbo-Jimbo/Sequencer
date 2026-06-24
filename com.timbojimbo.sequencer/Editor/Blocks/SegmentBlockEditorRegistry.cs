@@ -1,7 +1,7 @@
 using System;
 using TimboJimbo.Sequencer;
 
-namespace TimboJimboEditor.Sequencer
+namespace TimboJimboEditor.Sequencer.Blocks
 {
     public static class SegmentBlockEditorRegistry
     {
@@ -17,6 +17,7 @@ namespace TimboJimboEditor.Sequencer
         {
             if (EditorExtensionRegistry<CustomSegmentBlockEditorAttribute, SegmentBlockEditor>.TryGetExtension(segmentType, out var customEditor))
                 return customEditor;
+                
             return new SegmentBlockEditor();
         }
     }

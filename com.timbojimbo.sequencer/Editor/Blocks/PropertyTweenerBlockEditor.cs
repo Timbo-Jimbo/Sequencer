@@ -4,7 +4,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
 
-namespace TimboJimboEditor.Sequencer.Segments
+namespace TimboJimboEditor.Sequencer.Blocks
 {
     [CustomSegmentBlockEditor(typeof(PropertyTweener))]
     public sealed class PropertyTweenerBlockEditor : SegmentBlockEditor

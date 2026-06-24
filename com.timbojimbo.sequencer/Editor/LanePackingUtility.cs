@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace TimboJimboEditor.Sequencer
 {
-    public static class TimelineEditorUtility
+    public static class LanePackingUtility
     {
         public static List<ItemToLane<T>> PackIntoLanes<T>(
             IReadOnlyList<T> items,

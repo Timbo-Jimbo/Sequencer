@@ -5,16 +5,14 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
 
-namespace TimboJimboEditor.Sequencer
+namespace TimboJimboEditor.Sequencer.Blocks
 {
     [AttributeUsage(AttributeTargets.Class, Inherited = false)]
-    public sealed class CustomSegmentBlockEditorAttribute : Attribute
+    public sealed class CustomSegmentBlockEditorAttribute : EditorExtensionAttribute
     {
-        public Type InspectedType { get; }
 
-        public CustomSegmentBlockEditorAttribute(Type inspectedType)
+        public CustomSegmentBlockEditorAttribute(Type inspectedType) : base(inspectedType)
         {
-            InspectedType = inspectedType;
         }
     }
 
@@ -96,7 +94,7 @@ namespace TimboJimboEditor.Sequencer
             float parentStart = plan.Timing.AbsoluteStartTime;
             float parentDuration = Mathf.Max(plan.Timing.AbsoluteDuration, 0.0001f);
 
-            var packed = TimelineEditorUtility.PackIntoLanes(
+            var packed = LanePackingUtility.PackIntoLanes(
                 children,
                 itemStart: child => child.Timing.AbsoluteStartTime - parentStart,
                 itemEnd: child => child.Timing.AbsoluteEndTime - parentStart

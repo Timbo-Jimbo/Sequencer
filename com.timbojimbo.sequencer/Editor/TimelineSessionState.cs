@@ -4,7 +4,6 @@ using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using TimboJimbo.Sequencer;
-using TimboJimbo.Sequencer.Segments;
 
 namespace TimboJimboEditor.Sequencer
 {

@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
 
-namespace TimboJimboEditor.Sequencer
+namespace TimboJimboEditor.Sequencer.Recorders
 {
     public static class SegmentRecorderRegistry
     {
         public static bool HasAnyRecorders()
         {
-            return GetRecorderFor(typeof(TimboJimbo.Sequencer.Segments.PropertyTweener)) != null; // True if there are recorders
+            return EditorExtensionRegistry<CustomSegmentRecorderAttribute, SegmentRecorder>.HasAnyExtensions();
         }
 
         public static SegmentRecorder GetRecorderFor(Type segmentType)

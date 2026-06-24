@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using TimboJimbo.Sequencer;
+using TimboJimboEditor.Sequencer.Blocks;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;

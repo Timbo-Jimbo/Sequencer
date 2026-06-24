@@ -3,16 +3,13 @@ using TimboJimbo.PropertyBindings;
 using TimboJimbo.Sequencer;
 using UnityEngine;
 
-namespace TimboJimboEditor.Sequencer
+namespace TimboJimboEditor.Sequencer.Recorders
 {
     [AttributeUsage(AttributeTargets.Class, Inherited = false)]
-    public sealed class CustomSegmentRecorderAttribute : Attribute
+    public sealed class CustomSegmentRecorderAttribute : EditorExtensionAttribute
     {
-        public Type InspectedType { get; }
-
-        public CustomSegmentRecorderAttribute(Type inspectedType)
+        public CustomSegmentRecorderAttribute(Type inspectedType) : base(inspectedType)
         {
-            InspectedType = inspectedType;
         }
     }
 

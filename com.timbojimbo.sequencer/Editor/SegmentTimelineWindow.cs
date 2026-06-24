@@ -10,6 +10,7 @@ using TimboJimboEditor.PropertyBindings.Utility;
 using UnityEditor.SceneManagement;
 using TimboJimbo.Sequencer;
 using TimboJimbo.Sequencer.Segments;
+using TimboJimboEditor.Sequencer.Recorders;
 
 namespace TimboJimboEditor.Sequencer
 {
@@ -575,7 +576,6 @@ namespace TimboJimboEditor.Sequencer
             _editTracker = new UserEditTracker(filterOut: bp =>
                 bp.Target is SequenceProvider || !_recordSnapshotValues.ContainsKey(bp));
             _editTracker.StartDetecting(OnRecordedUserEdit);
-            UpdateRecordLabel();
             UpdatePreviewVisuals();
         }
 
@@ -600,7 +600,6 @@ namespace TimboJimboEditor.Sequencer
             if (_recordToggle != null)
             {
                 _recordToggle.SetValueWithoutNotify(false);
-                UpdateRecordLabel();
             }
 
             UpdatePreviewVisuals();
@@ -638,8 +637,6 @@ namespace TimboJimboEditor.Sequencer
                     }
                     break;
             }
-
-            UpdateRecordLabel();
         }
 
         private void OnRecordedEdit(BindablePropertyValueEdit edit)
@@ -743,11 +740,6 @@ namespace TimboJimboEditor.Sequencer
                 foreach (var pair in _recordSnapshotValues)
                     _recordCollection.TryWrite(pair.Key, pair.Value);
             }
-        }
-
-        private void UpdateRecordLabel()
-        {
-            if (_recordToggle != null) _recordToggle.text = "● Rec";
         }
     }
 }

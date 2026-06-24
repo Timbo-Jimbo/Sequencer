@@ -37,7 +37,7 @@ namespace TimboJimboEditor.Sequencer
         public Action CopyRequested;
         public Action PasteRequested;
         public bool Snap = false;
-        public IReadOnlyList<SegmentSelectionModel> SelectedModels => _selection.ActiveSelection;
+        public IReadOnlyList<SegmentSelectionModel> SelectedModels => _selection.EffectiveSelection;
 
         private readonly List<PlanBlock> _blocks = new();
         private readonly List<SegmentSelectionModel> _models = new();
@@ -173,46 +173,46 @@ namespace TimboJimboEditor.Sequencer
 
         private sealed class SelectionState
         {
-            private readonly List<SegmentSelectionModel> _concrete = new(); 
-            private readonly List<SegmentSelectionModel> _active = new();     
+            private readonly List<SegmentSelectionModel> _committed = new(); 
+            private readonly List<SegmentSelectionModel> _effective = new();     
             private readonly List<SegmentSelectionModel> _marqueeBase = new();
             private readonly List<SegmentSelectionModel> _marqueeCurrent = new();
             private bool _marqueeActive;
             private MarqueeMode _marqueeMode;
 
-            public IReadOnlyList<SegmentSelectionModel> ActiveSelection => _active;
+            public IReadOnlyList<SegmentSelectionModel> EffectiveSelection => _effective;
 
             public bool IsSelected(SegmentSelectionModel model)
             {
                 if (model == null)
                     return false;
 
-                return _active.Contains(model);
+                return _effective.Contains(model);
             }
 
-            public void ReplaceConcrete(IReadOnlyList<SegmentSelectionModel> selectedModels)
+            public void SetCommittedSelection(IReadOnlyList<SegmentSelectionModel> selectedModels)
             {
-                _concrete.Clear();
+                _committed.Clear();
 
                 if (selectedModels != null)
                 {
                     for (int i = 0; i < selectedModels.Count; i++)
-                        AddUnique(_concrete, selectedModels[i]);
+                        AddUnique(_committed, selectedModels[i]);
                 }
 
-                RebuildActiveSelection();
+                RebuildEffectiveSelection();
             }
 
             public void Clear()
             {
-                _concrete.Clear();
+                _committed.Clear();
                 _marqueeBase.Clear();
                 _marqueeCurrent.Clear();
                 _marqueeActive = false;
-                _active.Clear();
+                _effective.Clear();
             }
 
-            public List<SegmentSelectionModel> GetClickSingleTarget(SegmentSelectionModel clicked)
+            public List<SegmentSelectionModel> BuildSingleSelection(SegmentSelectionModel clicked)
             {
                 var list = new List<SegmentSelectionModel>();
                 if (clicked != null)
@@ -220,26 +220,26 @@ namespace TimboJimboEditor.Sequencer
                 return list;
             }
 
-            public List<SegmentSelectionModel> GetCtrlClickTarget(SegmentSelectionModel clicked)
+            public List<SegmentSelectionModel> BuildToggleSelection(SegmentSelectionModel clicked)
             {
-                var list = new List<SegmentSelectionModel>(_concrete);
+                var list = new List<SegmentSelectionModel>(_committed);
                 Toggle(list, clicked);
                 return list;
             }
 
-            public List<SegmentSelectionModel> GetShiftClickTarget(SegmentSelectionModel clicked, IReadOnlyList<PlanBlock> blocks)
+            public List<SegmentSelectionModel> BuildRangeSelection(SegmentSelectionModel clicked, IReadOnlyList<PlanBlock> blocks)
             {
                 var list = new List<SegmentSelectionModel>();
                 if (clicked == null)
                     return list;
 
-                if (_concrete.Count == 0)
+                if (_committed.Count == 0)
                 {
                     list.Add(clicked);
                     return list;
                 }
 
-                var anchor = _concrete[^1];
+                var anchor = _committed[^1];
                 if (!TryGetBlockByModel(anchor, blocks, out var anchorBlock) ||
                     !TryGetBlockByModel(clicked, blocks, out var clickedBlock))
                 {
@@ -249,7 +249,7 @@ namespace TimboJimboEditor.Sequencer
 
                 var marquee = BuildMarqueeFromLayoutRects(anchorBlock.LayoutRect, clickedBlock.LayoutRect);
 
-                list.AddRange(_concrete);
+                list.AddRange(_committed);
                 for (int i = 0; i < blocks.Count; i++)
                 {
                     var candidate = blocks[i];
@@ -271,12 +271,9 @@ namespace TimboJimboEditor.Sequencer
                 _marqueeMode = mode;
 
                 if (mode != MarqueeMode.Replace)
-                {
-                    for (int i = 0; i < _concrete.Count; i++)
-                        AddUnique(_marqueeBase, _concrete[i]);
-                }
+                    AddUnique(_marqueeBase, _committed);
 
-                RebuildActiveSelection();
+                RebuildEffectiveSelection();
             }
 
             public void UpdateMarquee(IReadOnlyList<SegmentSelectionModel> marqueeHits)
@@ -299,41 +296,20 @@ namespace TimboJimboEditor.Sequencer
                         if (_marqueeMode == MarqueeMode.Subtractive && !_marqueeBase.Contains(hit))
                             continue;
 
-                        if (_marqueeMode == MarqueeMode.Replace || _marqueeMode == MarqueeMode.Additive || _marqueeMode == MarqueeMode.Subtractive)
-                            AddUnique(_marqueeCurrent, hit);
+                        AddUnique(_marqueeCurrent, hit);
                     }
                 }
 
-                RebuildActiveSelection();
+                RebuildEffectiveSelection();
             }
 
-            public List<SegmentSelectionModel> GetMarqueeCommitTarget()
+            public List<SegmentSelectionModel> BuildCommittedMarqueeSelection()
             {
                 if (!_marqueeActive)
-                    return new List<SegmentSelectionModel>(_concrete);
+                    return new List<SegmentSelectionModel>(_committed);
 
                 var list = new List<SegmentSelectionModel>();
-                if (_marqueeMode == MarqueeMode.Replace)
-                {
-                    for (int i = 0; i < _marqueeCurrent.Count; i++)
-                        AddUnique(list, _marqueeCurrent[i]);
-                }
-                else if (_marqueeMode == MarqueeMode.Additive)
-                {
-                    for (int i = 0; i < _marqueeBase.Count; i++)
-                        AddUnique(list, _marqueeBase[i]);
-                    for (int i = 0; i < _marqueeCurrent.Count; i++)
-                        AddUnique(list, _marqueeCurrent[i]);
-                }
-                else // Subtractive
-                {
-                    for (int i = 0; i < _marqueeBase.Count; i++)
-                    {
-                        var candidate = _marqueeBase[i];
-                        if (!_marqueeCurrent.Contains(candidate))
-                            AddUnique(list, candidate);
-                    }
-                }
+                BuildMarqueeResult(list);
                 return list;
             }
 
@@ -342,41 +318,44 @@ namespace TimboJimboEditor.Sequencer
                 _marqueeBase.Clear();
                 _marqueeCurrent.Clear();
                 _marqueeActive = false;
-                RebuildActiveSelection();
+                RebuildEffectiveSelection();
             }
 
-            private void RebuildActiveSelection()
+            private void RebuildEffectiveSelection()
             {
-                _active.Clear();
+                _effective.Clear();
 
                 if (_marqueeActive)
                 {
-                    if (_marqueeMode == MarqueeMode.Replace)
-                    {
-                        for (int i = 0; i < _marqueeCurrent.Count; i++)
-                            AddUnique(_active, _marqueeCurrent[i]);
-                    }
-                    else if (_marqueeMode == MarqueeMode.Additive)
-                    {
-                        for (int i = 0; i < _marqueeBase.Count; i++)
-                            AddUnique(_active, _marqueeBase[i]);
-                        for (int i = 0; i < _marqueeCurrent.Count; i++)
-                            AddUnique(_active, _marqueeCurrent[i]);
-                    }
-                    else // Subtractive
-                    {
+                    BuildMarqueeResult(_effective);
+                    return;
+                }
+
+                AddUnique(_effective, _committed);
+            }
+
+            private void BuildMarqueeResult(List<SegmentSelectionModel> output)
+            {
+                switch (_marqueeMode)
+                {
+                    case MarqueeMode.Replace:
+                        AddUnique(output, _marqueeCurrent);
+                        break;
+
+                    case MarqueeMode.Additive:
+                        AddUnique(output, _marqueeBase);
+                        AddUnique(output, _marqueeCurrent);
+                        break;
+
+                    case MarqueeMode.Subtractive:
                         for (int i = 0; i < _marqueeBase.Count; i++)
                         {
                             var candidate = _marqueeBase[i];
                             if (!_marqueeCurrent.Contains(candidate))
-                                AddUnique(_active, candidate);
+                                AddUnique(output, candidate);
                         }
-                    }
-                    return;
+                        break;
                 }
-
-                for (int i = 0; i < _concrete.Count; i++)
-                    AddUnique(_active, _concrete[i]);
             }
 
             private static void Toggle(List<SegmentSelectionModel> list, SegmentSelectionModel model)
@@ -397,6 +376,15 @@ namespace TimboJimboEditor.Sequencer
                     return;
 
                 list.Add(model);
+            }
+
+            private static void AddUnique(List<SegmentSelectionModel> list, IReadOnlyList<SegmentSelectionModel> models)
+            {
+                if (models == null)
+                    return;
+
+                for (int i = 0; i < models.Count; i++)
+                    AddUnique(list, models[i]);
             }
 
             private static bool TryGetBlockByModel(SegmentSelectionModel model, IReadOnlyList<PlanBlock> blocks, out PlanBlock block)
@@ -732,7 +720,7 @@ namespace TimboJimboEditor.Sequencer
         public void SetView(IReadOnlyList<SegmentSelectionModel> activeModels, IReadOnlyList<SegmentSelectionModel> selectedModels)
         {
             ResetInteractionState();
-            _selection.ReplaceConcrete(selectedModels);
+            _selection.SetCommittedSelection(selectedModels);
 
             _models.Clear();
             if (activeModels != null)
@@ -753,7 +741,7 @@ namespace TimboJimboEditor.Sequencer
 
         public void SetSelection(IReadOnlyList<SegmentSelectionModel> selectedModels)
         {
-            _selection.ReplaceConcrete(selectedModels);
+            _selection.SetCommittedSelection(selectedModels);
             RebuildSnapTimes();
             RefreshSelectionVisuals();
         }
@@ -853,7 +841,7 @@ namespace TimboJimboEditor.Sequencer
                     bool selectedBeforeClick = _selection.IsSelected(planVisual.Model);
                     if (!selectedBeforeClick)
                     {
-                        HandleBlockSelectionClick(planVisual, shift, action);
+                        RequestBlockClickSelection(planVisual, shift, action);
 
                         if (shift || action)
                         {
@@ -927,7 +915,7 @@ namespace TimboJimboEditor.Sequencer
 
         private bool TryGetSelectionBounds(out Rect bounds, bool includePadding)
         {
-            var selection = _selection.ActiveSelection;
+            var selection = _selection.EffectiveSelection;
             if (selection.Count == 0)
             {
                 bounds = default;
@@ -984,18 +972,18 @@ namespace TimboJimboEditor.Sequencer
             _selectionOutline.style.display = DisplayStyle.Flex;
         }
 
-        private void HandleBlockSelectionClick(PlanBlock clickedBlock, bool shift, bool action)
+        private void RequestBlockClickSelection(PlanBlock clickedBlock, bool shift, bool action)
         {
             if (clickedBlock?.Model == null)
                 return;
 
             List<SegmentSelectionModel> targetSelection;
             if (shift)
-                targetSelection = _selection.GetShiftClickTarget(clickedBlock.Model, _blocks);
+                targetSelection = _selection.BuildRangeSelection(clickedBlock.Model, _blocks);
             else if (action)
-                targetSelection = _selection.GetCtrlClickTarget(clickedBlock.Model);
+                targetSelection = _selection.BuildToggleSelection(clickedBlock.Model);
             else
-                targetSelection = _selection.GetClickSingleTarget(clickedBlock.Model);
+                targetSelection = _selection.BuildSingleSelection(clickedBlock.Model);
 
             SelectionChanged?.Invoke(targetSelection);
         }
@@ -1070,7 +1058,7 @@ namespace TimboJimboEditor.Sequencer
                 worldPosition,
                 selectionStartTime,
                 selectionDurationTime,
-                _selection.ActiveSelection);
+                _selection.EffectiveSelection);
             return true;
         }
 
@@ -1104,7 +1092,7 @@ namespace TimboJimboEditor.Sequencer
 
         private bool TryGetSelectionTimeBounds(out float start, out float duration)
         {
-            var selection = _selection.ActiveSelection;
+            var selection = _selection.EffectiveSelection;
             if (selection.Count == 0)
             {
                 start = 0f;
@@ -1143,7 +1131,7 @@ namespace TimboJimboEditor.Sequencer
             canResizeLeft = false;
             canResizeRight = false;
 
-            var selected = _selection.ActiveSelection;
+            var selected = _selection.EffectiveSelection;
             for (int i = 0; i < selected.Count; i++)
             {
                 var model = selected[i];
@@ -1778,7 +1766,7 @@ namespace TimboJimboEditor.Sequencer
                     var hits = CollectMarqueeHits(rect);
                     _selection.UpdateMarquee(hits);
                     
-                    var targetSelection = _selection.GetMarqueeCommitTarget();
+                    var targetSelection = _selection.BuildCommittedMarqueeSelection();
                     _selection.EndMarquee();
                     SelectionChanged?.Invoke(targetSelection);
                     _marqueeBox.style.display = DisplayStyle.None;
@@ -1798,7 +1786,7 @@ namespace TimboJimboEditor.Sequencer
 
                 case PointerSessionMode.BlockPress:
                     if (_pointerSession.BlockWasSelected)
-                        HandleBlockSelectionClick(_pointerSession.PressedBlock, _pointerSession.Shift, _pointerSession.Action);
+                        RequestBlockClickSelection(_pointerSession.PressedBlock, _pointerSession.Shift, _pointerSession.Action);
 
                     EndPointerSession();
                     evt.StopPropagation();
@@ -1850,9 +1838,9 @@ namespace TimboJimboEditor.Sequencer
         {
             if (evt.keyCode == KeyCode.Delete || evt.keyCode == KeyCode.Backspace)
             {
-                if (_selection.ActiveSelection.Count > 0)
+                if (_selection.EffectiveSelection.Count > 0)
                 {
-                    DeleteRequested?.Invoke(_selection.ActiveSelection);
+                    DeleteRequested?.Invoke(_selection.EffectiveSelection);
                     evt.StopPropagation();
                 }
                 return;
@@ -1860,7 +1848,7 @@ namespace TimboJimboEditor.Sequencer
 
             if ((evt.ctrlKey || evt.commandKey) && evt.keyCode == KeyCode.C)
             {
-                if (_selection.ActiveSelection.Count > 0)
+                if (_selection.EffectiveSelection.Count > 0)
                     CopyRequested?.Invoke();
                 return;
             }
@@ -1874,7 +1862,7 @@ namespace TimboJimboEditor.Sequencer
 
             if (evt.keyCode == KeyCode.F)
             {
-                if (_selection.ActiveSelection.Count > 0)
+                if (_selection.EffectiveSelection.Count > 0)
                     FrameSelection();
                 else
                     FrameAllInternal();
@@ -1887,13 +1875,13 @@ namespace TimboJimboEditor.Sequencer
         private void FrameSelection()
         {
             float width = resolvedStyle.width;
-            if (float.IsNaN(width) || width < 10f || _selection.ActiveSelection.Count == 0)
+            if (float.IsNaN(width) || width < 10f || _selection.EffectiveSelection.Count == 0)
                 return;
 
             float start = float.MaxValue;
             float end = float.MinValue;
 
-            var selection = _selection.ActiveSelection;
+            var selection = _selection.EffectiveSelection;
             for (int i = 0; i < selection.Count; i++)
             {
                 start = Mathf.Min(start, selection[i].StartTime);
@@ -1918,11 +1906,11 @@ namespace TimboJimboEditor.Sequencer
         {
             var hit = FindBlockAt(evt);
 
-            if (hit != null || _selection.ActiveSelection.Count > 0)
+            if (hit != null || _selection.EffectiveSelection.Count > 0)
             {
-                evt.menu.AppendAction(_selection.ActiveSelection.Count > 0 ? "Delete Selection" : "Delete Segment", _ =>
+                evt.menu.AppendAction(_selection.EffectiveSelection.Count > 0 ? "Delete Selection" : "Delete Segment", _ =>
                 {
-                    var selected = _selection.ActiveSelection;
+                    var selected = _selection.EffectiveSelection;
                     if (selected.Count > 0)
                         DeleteRequested?.Invoke(selected);
                     else

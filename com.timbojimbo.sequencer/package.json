@@ -1,13 +1,13 @@
 {
 	"name": "com.timbojimbo.sequencer",
 	"displayName": "Sequencer",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"unity": "6000.0",
 	"unityRelease": "0f1",
 	"description": "",
 	"dependencies": {
 		"com.timbojimbo.core": "0.5.1",
-		"com.timbojimbo.propertybindings": "0.6.1"
+		"com.timbojimbo.propertybindings": "0.6.2"
 	},
 	"author": {
 		"name": "Timbo Jimbo",

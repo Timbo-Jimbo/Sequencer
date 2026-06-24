@@ -5,8 +5,8 @@ using UnityEngine.UIElements;
 
 namespace TimboJimboEditor.Sequencer.Segments
 {
-    [CustomSegmentEditor(typeof(InsertSequenceProvider))]
-    public sealed class InsertSequenceProviderEditor : SegmentEditor
+    [CustomSegmentBlockEditor(typeof(InsertSequenceProvider))]
+    public sealed class InsertSequenceProviderBlockEditor : SegmentBlockEditor
     {
         public override void OnBlockGUI(Segment segment, VisualElement block)
         {

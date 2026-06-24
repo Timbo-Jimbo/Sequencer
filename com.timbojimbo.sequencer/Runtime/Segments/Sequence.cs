@@ -9,6 +9,7 @@ namespace TimboJimbo.Sequencer.Segments
     [AddSegmentMenu("")]
     public class Sequence : Segment, IStartTimeConfigurable
     {
+        public string Name;
         public float StartTime;
         public GameObject BindingRoot;
 

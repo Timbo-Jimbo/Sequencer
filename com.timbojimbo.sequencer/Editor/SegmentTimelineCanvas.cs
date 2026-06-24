@@ -22,7 +22,6 @@ namespace TimboJimboEditor.Sequencer
         private const float MaxZoom = 1600f;
         private const float ResizeHandlePx = 8f;
         private const float OutlinePadding = 1f;
-        private const int SnapDepth = 2;
         private const float SnapThresholdPx = 20f;
         private const float TransformDragThresholdPx = 8f;
 
@@ -30,18 +29,18 @@ namespace TimboJimboEditor.Sequencer
 
         private enum DragKind { None, ResizeLeft, ResizeRight, Move }
 
-        public Action<IReadOnlyList<SegmentPlan>> SelectionChanged;
-        public Action<SegmentPlan, float, float> TimeAdjustmentCommitted;
-        public Action<IReadOnlyList<SegmentPlan>> DeleteRequested;
+        public Action<IReadOnlyList<SegmentSelectionModel>> SelectionChanged;
+        public Action<SegmentSelectionModel, float, float> TimeAdjustmentCommitted;
+        public Action<IReadOnlyList<SegmentSelectionModel>> DeleteRequested;
         public Action<Type, float> AddRequested;
         public Action<float> SeekRequested;
         public Action CopyRequested;
         public Action PasteRequested;
         public bool Snap = false;
-        public IReadOnlyList<SegmentPlan> SelectedPlans => _selection.ActiveSelection;
+        public IReadOnlyList<SegmentSelectionModel> SelectedModels => _selection.ActiveSelection;
 
         private readonly List<PlanBlock> _blocks = new();
-        private readonly List<SegmentPlan> _activeLayer = new();
+        private readonly List<SegmentSelectionModel> _models = new();
         private readonly SelectionState _selection = new();
         private readonly List<SegmentSnapCandidate> _segmentSnapCandidates = new();
         private readonly List<Label> _rulerLabels = new();
@@ -51,7 +50,6 @@ namespace TimboJimboEditor.Sequencer
         private readonly VisualElement _selectionOutline;
         private readonly VisualElement _marqueeBox;
 
-        private SegmentPlan _activeRoot;
         private float _time;
         private bool _previewActive;
         private float _pixelsPerSecond = 120f;
@@ -89,7 +87,7 @@ namespace TimboJimboEditor.Sequencer
             }
         }
 
-        private sealed class SkipTransitionsScope : System.IDisposable
+        private sealed class SkipTransitionsScope : IDisposable
         {
             private Dictionary<VisualElement, CachedTransitions> _cache;
 
@@ -169,7 +167,7 @@ namespace TimboJimboEditor.Sequencer
 
         private sealed class PlanBlock
         {
-            public SegmentPlan Plan;
+            public SegmentSelectionModel Model;
             public VisualElement SelectionHighlight;
             public VisualElement Root;
             public Rect LayoutRect;
@@ -177,32 +175,32 @@ namespace TimboJimboEditor.Sequencer
 
         private sealed class SelectionState
         {
-            private readonly List<SegmentPlan> _concrete = new();
-            private readonly List<SegmentPlan> _transient = new();
-            private readonly List<SegmentPlan> _active = new();
-            private readonly List<SegmentPlan> _marqueeBase = new();
-            private readonly List<SegmentPlan> _marqueeCurrent = new();
+            private readonly List<SegmentSelectionModel> _concrete = new();
+            private readonly List<SegmentSelectionModel> _transient = new();
+            private readonly List<SegmentSelectionModel> _active = new();
+            private readonly List<SegmentSelectionModel> _marqueeBase = new();
+            private readonly List<SegmentSelectionModel> _marqueeCurrent = new();
             private bool _marqueeActive;
             private MarqueeMode _marqueeMode;
 
-            public IReadOnlyList<SegmentPlan> ActiveSelection => _active;
+            public IReadOnlyList<SegmentSelectionModel> ActiveSelection => _active;
 
-            public bool IsSelected(SegmentPlan plan)
+            public bool IsSelected(SegmentSelectionModel model)
             {
-                if (plan == null)
+                if (model == null)
                     return false;
 
-                return _active.Contains(plan);
+                return _active.Contains(model);
             }
 
-            public void ReplaceConcrete(IReadOnlyList<SegmentPlan> selectedPlans)
+            public void ReplaceConcrete(IReadOnlyList<SegmentSelectionModel> selectedModels)
             {
                 _concrete.Clear();
 
-                if (selectedPlans != null)
+                if (selectedModels != null)
                 {
-                    for (int i = 0; i < selectedPlans.Count; i++)
-                        AddUnique(_concrete, selectedPlans[i]);
+                    for (int i = 0; i < selectedModels.Count; i++)
+                        AddUnique(_concrete, selectedModels[i]);
                 }
 
                 _transient.Clear();
@@ -219,7 +217,7 @@ namespace TimboJimboEditor.Sequencer
                 _active.Clear();
             }
 
-            public void ClickSingle(SegmentPlan clicked)
+            public void ClickSingle(SegmentSelectionModel clicked)
             {
                 _transient.Clear();
                 _concrete.Clear();
@@ -227,14 +225,14 @@ namespace TimboJimboEditor.Sequencer
                 RebuildActiveSelection();
             }
 
-            public void CtrlClick(SegmentPlan clicked)
+            public void CtrlClick(SegmentSelectionModel clicked)
             {
                 CommitTransientToConcrete();
                 Toggle(_concrete, clicked);
                 RebuildActiveSelection();
             }
 
-            public void ShiftClick(SegmentPlan clicked, IReadOnlyList<PlanBlock> blocks)
+            public void ShiftClick(SegmentSelectionModel clicked, IReadOnlyList<PlanBlock> blocks)
             {
                 if (clicked == null)
                     return;
@@ -246,8 +244,8 @@ namespace TimboJimboEditor.Sequencer
                 }
 
                 var anchor = _concrete[^1];
-                if (!TryGetBlockByPlan(anchor, blocks, out var anchorBlock) ||
-                    !TryGetBlockByPlan(clicked, blocks, out var clickedBlock))
+                if (!TryGetBlockByModel(anchor, blocks, out var anchorBlock) ||
+                    !TryGetBlockByModel(clicked, blocks, out var clickedBlock))
                 {
                     ClickSingle(clicked);
                     return;
@@ -259,11 +257,11 @@ namespace TimboJimboEditor.Sequencer
                 for (int i = 0; i < blocks.Count; i++)
                 {
                     var candidate = blocks[i];
-                    if (candidate == null || candidate.Plan == null)
+                    if (candidate == null || candidate.Model == null)
                         continue;
 
-                    if (candidate.LayoutRect.Overlaps(marquee) && !_concrete.Contains(candidate.Plan))
-                        AddUnique(_transient, candidate.Plan);
+                    if (candidate.LayoutRect.Overlaps(marquee) && !_concrete.Contains(candidate.Model))
+                        AddUnique(_transient, candidate.Model);
                 }
 
                 if (_transient.Count == 0 && !_concrete.Contains(clicked))
@@ -290,7 +288,7 @@ namespace TimboJimboEditor.Sequencer
                 RebuildActiveSelection();
             }
 
-            public void UpdateMarquee(IReadOnlyList<SegmentPlan> marqueeHits)
+            public void UpdateMarquee(IReadOnlyList<SegmentSelectionModel> marqueeHits)
             {
                 if (!_marqueeActive)
                     return;
@@ -401,32 +399,32 @@ namespace TimboJimboEditor.Sequencer
                     AddUnique(_active, _transient[i]);
             }
 
-            private static void Toggle(List<SegmentPlan> list, SegmentPlan plan)
+            private static void Toggle(List<SegmentSelectionModel> list, SegmentSelectionModel model)
             {
-                if (plan == null)
+                if (model == null)
                     return;
 
-                int existingIndex = list.FindIndex(p => ReferenceEquals(p, plan));
+                int existingIndex = list.FindIndex(p => ReferenceEquals(p, model));
                 if (existingIndex >= 0)
                     list.RemoveAt(existingIndex);
                 else
-                    list.Add(plan);
+                    list.Add(model);
             }
 
-            private static void AddUnique(List<SegmentPlan> list, SegmentPlan plan)
+            private static void AddUnique(List<SegmentSelectionModel> list, SegmentSelectionModel model)
             {
-                if (plan == null || list.Contains(plan))
+                if (model == null || list.Contains(model))
                     return;
 
-                list.Add(plan);
+                list.Add(model);
             }
 
-            private static bool TryGetBlockByPlan(SegmentPlan plan, IReadOnlyList<PlanBlock> blocks, out PlanBlock block)
+            private static bool TryGetBlockByModel(SegmentSelectionModel model, IReadOnlyList<PlanBlock> blocks, out PlanBlock block)
             {
                 for (int i = 0; i < blocks.Count; i++)
                 {
                     var candidate = blocks[i];
-                    if (candidate != null && ReferenceEquals(candidate.Plan, plan))
+                    if (candidate != null && ReferenceEquals(candidate.Model, model))
                     {
                         block = candidate;
                         return true;
@@ -449,19 +447,19 @@ namespace TimboJimboEditor.Sequencer
         {
             private readonly struct Entry
             {
-                public readonly SegmentPlan Plan;
+                public readonly SegmentSelectionModel Model;
                 public readonly float Start;
                 public readonly float Duration;
                 public readonly bool CanAdjustStart;
                 public readonly bool CanAdjustDuration;
 
-                public Entry(SegmentPlan plan)
+                public Entry(SegmentSelectionModel model)
                 {
-                    Plan = plan;
-                    Start = plan.Timing.AbsoluteStartTime;
-                    Duration = plan.Timing.AbsoluteDuration;
-                    CanAdjustStart = plan.CanAdjustStartTime;
-                    CanAdjustDuration = plan.CanAdjustDuration;
+                    Model = model;
+                    Start = model.StartTime;
+                    Duration = model.Duration;
+                    CanAdjustStart = model.CanAdjustStartTime;
+                    CanAdjustDuration = model.CanAdjustDuration;
                 }
             }
 
@@ -484,7 +482,7 @@ namespace TimboJimboEditor.Sequencer
             public readonly float InitialSelectionDuration;
 
             private readonly List<Entry> _entries;
-            private readonly Dictionary<SegmentPlan, GhostTiming> _ghostByPlan;
+            private readonly Dictionary<SegmentSelectionModel, GhostTiming> _ghostByModel;
             private bool _hasChanges;
 
             public bool HasChanges => _hasChanges;
@@ -495,7 +493,7 @@ namespace TimboJimboEditor.Sequencer
                 Vector2 pointerStart,
                 float selectionStart,
                 float selectionDuration,
-                IReadOnlyList<SegmentPlan> selectedPlans)
+                IReadOnlyList<SegmentSelectionModel> selectedModels)
             {
                 Kind = kind;
                 PointerId = pointerId;
@@ -504,21 +502,21 @@ namespace TimboJimboEditor.Sequencer
                 InitialSelectionDuration = Mathf.Max(selectionDuration, 0.0001f);
 
                 _entries = new List<Entry>();
-                _ghostByPlan = new Dictionary<SegmentPlan, GhostTiming>();
+                _ghostByModel = new Dictionary<SegmentSelectionModel, GhostTiming>();
                 _hasChanges = false;
 
-                if (selectedPlans == null)
+                if (selectedModels == null)
                     return;
 
-                for (int i = 0; i < selectedPlans.Count; i++)
+                for (int i = 0; i < selectedModels.Count; i++)
                 {
-                    var plan = selectedPlans[i];
-                    if (plan == null)
+                    var model = selectedModels[i];
+                    if (model == null)
                         continue;
 
-                    var entry = new Entry(plan);
+                    var entry = new Entry(model);
                     _entries.Add(entry);
-                    _ghostByPlan[plan] = new GhostTiming(entry.Start, entry.Duration);
+                    _ghostByModel[model] = new GhostTiming(entry.Start, entry.Duration);
                 }
             }
 
@@ -592,16 +590,16 @@ namespace TimboJimboEditor.Sequencer
                         }
                     }
 
-                    _ghostByPlan[entry.Plan] = new GhostTiming(newStart, newDuration);
+                    _ghostByModel[entry.Model] = new GhostTiming(newStart, newDuration);
 
                     if (Mathf.Abs(newStart - entry.Start) > 0.0001f || Mathf.Abs(newDuration - entry.Duration) > 0.0001f)
                         _hasChanges = true;
                 }
             }
 
-            public bool TryGetGhost(SegmentPlan plan, out float start, out float duration)
+            public bool TryGetGhost(SegmentSelectionModel model, out float start, out float duration)
             {
-                if (plan != null && _ghostByPlan.TryGetValue(plan, out var ghost))
+                if (model != null && _ghostByModel.TryGetValue(model, out var ghost))
                 {
                     start = ghost.Start;
                     duration = ghost.Duration;
@@ -613,7 +611,7 @@ namespace TimboJimboEditor.Sequencer
                 return false;
             }
 
-            public void GetCommittedChanges(List<(SegmentPlan plan, float start, float duration)> output)
+            public void GetCommittedChanges(List<(SegmentSelectionModel model, float start, float duration)> output)
             {
                 output.Clear();
                 if (!_hasChanges)
@@ -622,13 +620,13 @@ namespace TimboJimboEditor.Sequencer
                 for (int i = 0; i < _entries.Count; i++)
                 {
                     var entry = _entries[i];
-                    if (!_ghostByPlan.TryGetValue(entry.Plan, out var ghost))
+                    if (!_ghostByModel.TryGetValue(entry.Model, out var ghost))
                         continue;
 
                     if (Mathf.Abs(ghost.Start - entry.Start) <= 0.0001f && Mathf.Abs(ghost.Duration - entry.Duration) <= 0.0001f)
                         continue;
 
-                    output.Add((entry.Plan, ghost.Start, ghost.Duration));
+                    output.Add((entry.Model, ghost.Start, ghost.Duration));
                 }
             }
         }
@@ -751,16 +749,15 @@ namespace TimboJimboEditor.Sequencer
             this.AddManipulator(new ContextualMenuManipulator(BuildContextMenu));
         }
 
-        public void SetView(SegmentPlan activeRoot, IReadOnlyList<SegmentPlan> activeLayer, IReadOnlyList<SegmentPlan> selectedPlans)
+        public void SetView(IReadOnlyList<SegmentSelectionModel> activeModels, IReadOnlyList<SegmentSelectionModel> selectedModels)
         {
-            _activeRoot = activeRoot;
-            _selection.ReplaceConcrete(selectedPlans);
+            _selection.ReplaceConcrete(selectedModels);
 
-            _activeLayer.Clear();
-            if (activeLayer != null)
+            _models.Clear();
+            if (activeModels != null)
             {
-                for (int i = 0; i < activeLayer.Count; i++)
-                    _activeLayer.Add(activeLayer[i]);
+                for (int i = 0; i < activeModels.Count; i++)
+                    _models.Add(activeModels[i]);
             }
 
             RebuildBlocks();
@@ -773,9 +770,9 @@ namespace TimboJimboEditor.Sequencer
             MarkDirtyRepaint();
         }
 
-        public void SetSelection(IReadOnlyList<SegmentPlan> selectedPlans)
+        public void SetSelection(IReadOnlyList<SegmentSelectionModel> selectedModels)
         {
-            _selection.ReplaceConcrete(selectedPlans);
+            _selection.ReplaceConcrete(selectedModels);
             RebuildSnapTimes();
             RefreshSelectionVisuals();
         }
@@ -798,15 +795,15 @@ namespace TimboJimboEditor.Sequencer
             _contentRoot.Clear();
             _blocks.Clear();
 
-            for (int i = 0; i < _activeLayer.Count; i++)
+            for (int i = 0; i < _models.Count; i++)
             {
-                var segmentPlan = _activeLayer[i];
-                var editor = SegmentEditorRegistry.GetEditor(segmentPlan.Segment);
-                var blockColors = editor.GetBlockColors(segmentPlan.Segment);
+                var model = _models[i];
+                var editor = SegmentBlockEditorRegistry.GetEditor(model.Segment);
+                var blockColors = editor.GetBlockColors(model.Segment);
 
                 var planVisual = new PlanBlock
                 {
-                    Plan = segmentPlan,
+                    Model = model,
                     Root = new VisualElement
                     {
                         style =
@@ -872,11 +869,9 @@ namespace TimboJimboEditor.Sequencer
                     bool shift = evt.shiftKey;
                     bool action = evt.ctrlKey || evt.commandKey;
 
-                    bool selectedBeforeClick = _selection.IsSelected(planVisual.Plan);
+                    bool selectedBeforeClick = _selection.IsSelected(planVisual.Model);
                     if (selectedBeforeClick)
                     {
-                        // Always defer selection change to pointer-up so transform intent wins,
-                        // while preserving click semantics when no drag occurs.
                         ArmSelectionTransformFromPointer(evt.position, evt.pointerId);
                         _pendingSelectedClickBlock = planVisual;
                         _pendingSelectedClickPointerId = evt.pointerId;
@@ -900,7 +895,7 @@ namespace TimboJimboEditor.Sequencer
                     evt.StopPropagation();
                 });
 
-                bool zeroDur = IsZeroDuration(segmentPlan);
+                bool zeroDur = IsZeroDuration(model);
                 if (zeroDur)
                 {
                     planVisual.Root.style.borderTopWidth = 0f;
@@ -910,16 +905,34 @@ namespace TimboJimboEditor.Sequencer
                     planVisual.Root.style.backgroundColor = Color.clear;
                     planVisual.Root.style.overflow = Overflow.Visible;
 
-                    var capturedPlan = segmentPlan;
+                    var capturedModel = model;
                     var capturedRoot = planVisual.Root;
                     planVisual.Root.generateVisualContent += ctx =>
                     {
-                        DrawZeroDurationMarker(ctx, capturedPlan, capturedRoot);
+                        DrawZeroDurationMarker(ctx, capturedModel, capturedRoot);
                     };
                 }
                 else
                 {
-                    editor.OnBlockGUI(segmentPlan.Segment, planVisual.Root);
+                    var blockContainer = new VisualElement
+                    {
+                        style =
+                        {
+                            position = Position.Absolute,
+                            left = 0f,
+                            top = 0f,
+                            right = 0f,
+                            bottom = 0f,
+                            marginLeft = 4f,
+                            marginRight = 4f,
+                            marginTop = 2f,
+                            marginBottom = 2f,
+                        }
+                    };
+
+                    planVisual.Root.Add(blockContainer);
+
+                    editor.OnBlockGUI(model.Segment, blockContainer);
                 }
 
                 _contentRoot.Add(planVisual.Root);
@@ -934,7 +947,7 @@ namespace TimboJimboEditor.Sequencer
             for (int i = 0; i < _blocks.Count; i++)
             {
                 var block = _blocks[i];
-                bool selected = _selection.IsSelected(block.Plan);
+                bool selected = _selection.IsSelected(block.Model);
                 block.SelectionHighlight.style.display = selected ? DisplayStyle.Flex : DisplayStyle.None;
             }
 
@@ -966,7 +979,7 @@ namespace TimboJimboEditor.Sequencer
             for (int i = 0; i < _blocks.Count; i++)
             {
                 var block = _blocks[i];
-                if (!_selection.IsSelected(block.Plan))
+                if (!_selection.IsSelected(block.Model))
                     continue;
 
                 var layoutRect = block.LayoutRect;
@@ -1009,15 +1022,15 @@ namespace TimboJimboEditor.Sequencer
 
         private void HandleBlockSelectionClick(PlanBlock clickedBlock, bool shift, bool action)
         {
-            if (clickedBlock?.Plan == null)
+            if (clickedBlock?.Model == null)
                 return;
 
             if (shift)
-                _selection.ShiftClick(clickedBlock.Plan, _blocks);
+                _selection.ShiftClick(clickedBlock.Model, _blocks);
             else if (action)
-                _selection.CtrlClick(clickedBlock.Plan);
+                _selection.CtrlClick(clickedBlock.Model);
             else
-                _selection.ClickSingle(clickedBlock.Plan);
+                _selection.ClickSingle(clickedBlock.Model);
 
             RebuildSnapTimes();
             RefreshSelectionVisuals();
@@ -1032,8 +1045,8 @@ namespace TimboJimboEditor.Sequencer
 
             _viewWasEverFramed = true;
             float maxEnd = 1f;
-            for (int i = 0; i < _activeLayer.Count; i++)
-                maxEnd = Mathf.Max(maxEnd, _activeLayer[i].Timing.AbsoluteEndTime);
+            for (int i = 0; i < _models.Count; i++)
+                maxEnd = Mathf.Max(maxEnd, _models[i].EndTime);
 
             float padding = maxEnd * 0.05f;
             float viewStart = -padding;
@@ -1123,12 +1136,12 @@ namespace TimboJimboEditor.Sequencer
 
             for (int i = 0; i < selection.Count; i++)
             {
-                var plan = selection[i];
-                if (plan == null)
+                var model = selection[i];
+                if (model == null)
                     continue;
 
-                minStart = Mathf.Min(minStart, plan.Timing.AbsoluteStartTime);
-                maxEnd = Mathf.Max(maxEnd, plan.Timing.AbsoluteEndTime);
+                minStart = Mathf.Min(minStart, model.StartTime);
+                maxEnd = Mathf.Max(maxEnd, model.EndTime);
             }
 
             if (minStart == float.MaxValue || maxEnd == float.MinValue)
@@ -1152,33 +1165,31 @@ namespace TimboJimboEditor.Sequencer
             var selected = _selection.ActiveSelection;
             for (int i = 0; i < selected.Count; i++)
             {
-                var plan = selected[i];
-                if (plan == null)
+                var model = selected[i];
+                if (model == null)
                     continue;
 
-                canMove |= plan.CanAdjustStartTime;
-                canResizeLeft |= plan.CanAdjustStartTime && plan.CanAdjustDuration;
-                canResizeRight |= plan.CanAdjustDuration;
+                canMove |= model.CanAdjustStartTime;
+                canResizeLeft |= model.CanAdjustStartTime && model.CanAdjustDuration;
+                canResizeRight |= model.CanAdjustDuration;
             }
 
             if(!canResizeLeft && !canResizeRight)
             {
-                //at long as we have 2 or more items at differnet tiomes 
-                // with adjustable start times, then we can resize
                 int adjustableStartCount = 0;
                 float lastAdjustableStart = 0f;
                 for (int i = 0; i < selected.Count; i++)
                 {
-                    var plan = selected[i];
-                    if (plan == null || !plan.CanAdjustStartTime)
+                    var model = selected[i];
+                    if (model == null || !model.CanAdjustStartTime)
                         continue;
 
                     if(adjustableStartCount == 0)
                     {
                         adjustableStartCount++;
-                        lastAdjustableStart = plan.Timing.AbsoluteStartTime;
+                        lastAdjustableStart = model.StartTime;
                     }
-                    else if(Mathf.Abs(plan.Timing.AbsoluteStartTime - lastAdjustableStart) > 0.0001f)
+                    else if(Mathf.Abs(model.StartTime - lastAdjustableStart) > 0.0001f)
                     {
                         canResizeLeft = true;
                         canResizeRight = true;
@@ -1236,16 +1247,16 @@ namespace TimboJimboEditor.Sequencer
                 _blocks,
                 itemStart: block =>
                 {
-                    var isZero = IsZeroDuration(block.Plan);
-                    GetDisplayTiming(block.Plan, out float referenceStart, out float referenceDuration);
+                    var isZero = IsZeroDuration(block.Model);
+                    GetDisplayTiming(block.Model, out float referenceStart, out float referenceDuration);
                     var start = isZero ? referenceStart - (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceStart;
                     start = Mathf.Max(0f, start);
                     return start;
                 },
                 itemEnd: block =>
                 {
-                    var isZero = IsZeroDuration(block.Plan);
-                    GetDisplayTiming(block.Plan, out float referenceStart, out float referenceDuration);
+                    var isZero = IsZeroDuration(block.Model);
+                    GetDisplayTiming(block.Model, out float referenceStart, out float referenceDuration);
                     float referenceEnd = referenceStart + referenceDuration;
                     var end = isZero ? referenceEnd + (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceEnd;
                     end = Mathf.Max(0f, end);
@@ -1253,15 +1264,13 @@ namespace TimboJimboEditor.Sequencer
                 }
             );
 
-            var maxAbsoluteEnd = packed.Count > 0 ? packed.Max(entry => entry.Item.Plan.Timing.AbsoluteEndTime) : 0f;
-
             for (int i = 0; i < packed.Count; i++)
             {
                 var item = packed[i];
                 var block = item.Item;
-                var isZero = IsZeroDuration(block.Plan);
+                var isZero = IsZeroDuration(block.Model);
 
-                GetDisplayTiming(block.Plan, out float start, out float duration);
+                GetDisplayTiming(block.Model, out float start, out float duration);
 
                 var top = LaneTop + item.Lane * (LaneHeight + LaneGap);
                 var left = TimeToX(start);
@@ -1279,24 +1288,22 @@ namespace TimboJimboEditor.Sequencer
             UpdateSelectionOutline();
         }
 
-        private void GetDisplayTiming(SegmentPlan plan, out float start, out float duration)
+        private void GetDisplayTiming(SegmentSelectionModel model, out float start, out float duration)
         {
-            if (_selectionTransform != null && _selectionTransform.TryGetGhost(plan, out start, out duration))
+            if (_selectionTransform != null && _selectionTransform.TryGetGhost(model, out start, out duration))
                 return;
 
-            start = plan.Timing.AbsoluteStartTime;
-            duration = plan.Timing.AbsoluteDuration;
+            start = model.StartTime;
+            duration = model.Duration;
         }
 
         private void RebuildSnapTimes()
         {
             _segmentSnapCandidates.Clear();
-            if (_activeRoot == null)
-                return;
 
             HashSet<int> distinctTimes = new HashSet<int>();
 
-            void AddDistinct(float t, SegmentPlan plan)
+            void AddDistinct(float t)
             {
                 var id = Mathf.RoundToInt(t * 10000f);
                 if (!distinctTimes.Add(id))
@@ -1305,30 +1312,14 @@ namespace TimboJimboEditor.Sequencer
                 _segmentSnapCandidates.Add(new SegmentSnapCandidate(t));
             }
 
-            void Visit(SegmentPlan plan, int depth)
+            for (int i = 0; i < _models.Count; i++)
             {
-                if (plan == null || depth > SnapDepth)
-                    return;
+                var model = _models[i];
+                if (_selection.IsSelected(model))
+                    continue;
 
-                if (_selection.IsSelected(plan))
-                    return;
-
-                AddDistinct(plan.Timing.AbsoluteStartTime, plan);
-                AddDistinct(plan.Timing.AbsoluteEndTime, plan);
-
-                var children = plan.Children;
-                if (children == null)
-                    return;
-
-                for (int i = 0; i < children.Count; i++)
-                    Visit(children[i], depth + 1);
-            }
-
-            var roots = _activeRoot.Children;
-            if (roots != null)
-            {
-                for (int i = 0; i < roots.Count; i++)
-                    Visit(roots[i], 0);
+                AddDistinct(model.StartTime);
+                AddDistinct(model.EndTime);
             }
         }
 
@@ -1521,7 +1512,6 @@ namespace TimboJimboEditor.Sequencer
             if (width <= 1f || height <= 1f)
                 return;
 
-            // Ruler background
             painter.fillColor = new Color(0.105f, 0.105f, 0.105f);
             painter.BeginPath();
             painter.MoveTo(new Vector2(0, 0));
@@ -1531,7 +1521,6 @@ namespace TimboJimboEditor.Sequencer
             painter.ClosePath();
             painter.Fill();
 
-            // Timeline body background
             painter.fillColor = new Color(0.145f, 0.145f, 0.145f);
             painter.BeginPath();
             painter.MoveTo(new Vector2(0, RulerHeight));
@@ -1542,8 +1531,8 @@ namespace TimboJimboEditor.Sequencer
             painter.Fill();
 
             float maxEnd = 0f;
-            for (int i = 0; i < _activeLayer.Count; i++)
-                maxEnd = Mathf.Max(maxEnd, _activeLayer[i].Timing.AbsoluteEndTime);
+            for (int i = 0; i < _models.Count; i++)
+                maxEnd = Mathf.Max(maxEnd, _models[i].EndTime);
 
             painter.fillColor = new Color(0.09f, 0.09f, 0.09f);
             float x0 = TimeToX(0f);
@@ -1592,7 +1581,6 @@ namespace TimboJimboEditor.Sequencer
                 painter.Stroke();
             }
 
-            // Divider under ruler
             painter.strokeColor = new Color(0f, 0f, 0f, 0.35f);
             painter.lineWidth = 1f;
             painter.BeginPath();
@@ -1791,12 +1779,12 @@ namespace TimboJimboEditor.Sequencer
 
                 if (commitTransform)
                 {
-                    var changes = new List<(SegmentPlan plan, float start, float duration)>();
+                    var changes = new List<(SegmentSelectionModel model, float start, float duration)>();
                     _selectionTransform.GetCommittedChanges(changes);
                     for (int i = 0; i < changes.Count; i++)
                     {
                         var change = changes[i];
-                        TimeAdjustmentCommitted?.Invoke(change.plan, change.start, change.duration);
+                        TimeAdjustmentCommitted?.Invoke(change.model, change.start, change.duration);
                     }
                 }
 
@@ -1856,12 +1844,12 @@ namespace TimboJimboEditor.Sequencer
             {
                 if (_selectionTransform.HasChanges)
                 {
-                    var changes = new List<(SegmentPlan plan, float start, float duration)>();
+                    var changes = new List<(SegmentSelectionModel model, float start, float duration)>();
                     _selectionTransform.GetCommittedChanges(changes);
                     for (int i = 0; i < changes.Count; i++)
                     {
                         var change = changes[i];
-                        TimeAdjustmentCommitted?.Invoke(change.plan, change.start, change.duration);
+                        TimeAdjustmentCommitted?.Invoke(change.model, change.start, change.duration);
                     }
                 }
 
@@ -1904,10 +1892,7 @@ namespace TimboJimboEditor.Sequencer
             if ((evt.ctrlKey || evt.commandKey) && evt.keyCode == KeyCode.C)
             {
                 if (_selection.ActiveSelection.Count > 0)
-                {
                     CopyRequested?.Invoke();
-                    evt.StopPropagation();
-                }
                 return;
             }
 
@@ -1942,8 +1927,8 @@ namespace TimboJimboEditor.Sequencer
             var selection = _selection.ActiveSelection;
             for (int i = 0; i < selection.Count; i++)
             {
-                start = Mathf.Min(start, selection[i].Timing.AbsoluteStartTime);
-                end = Mathf.Max(end, selection[i].Timing.AbsoluteEndTime);
+                start = Mathf.Min(start, selection[i].StartTime);
+                end = Mathf.Max(end, selection[i].EndTime);
             }
 
             if (start == float.MaxValue || end == float.MinValue)
@@ -1972,7 +1957,7 @@ namespace TimboJimboEditor.Sequencer
                     if (selected.Count > 0)
                         DeleteRequested?.Invoke(selected);
                     else
-                        DeleteRequested?.Invoke(new[] { hit.Plan });
+                        DeleteRequested?.Invoke(new[] { hit.Model });
                 });
                 evt.menu.AppendSeparator();
             }
@@ -2015,14 +2000,14 @@ namespace TimboJimboEditor.Sequencer
             return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
         }
 
-        private List<SegmentPlan> CollectMarqueeHits(Rect marqueeLocal)
+        private List<SegmentSelectionModel> CollectMarqueeHits(Rect marqueeLocal)
         {
-            var hits = new List<SegmentPlan>();
+            var hits = new List<SegmentSelectionModel>();
 
             for (int i = 0; i < _blocks.Count; i++)
             {
                 if (_blocks[i].LayoutRect.Overlaps(marqueeLocal))
-                    hits.Add(_blocks[i].Plan);
+                    hits.Add(_blocks[i].Model);
             }
 
             return hits;
@@ -2039,15 +2024,9 @@ namespace TimboJimboEditor.Sequencer
             return Mathf.Round(time / increment) * increment;
         }
 
-        private static (Color fill, Color border) GetBlockColors(SegmentPlan segment)
-        {
-            var editor = SegmentEditorRegistry.GetEditor(segment.Segment);
-            return editor.GetBlockColors(segment.Segment);
-        }
+        private static bool IsZeroDuration(SegmentSelectionModel model) => model.Duration < 0.0001f;
 
-        private static bool IsZeroDuration(SegmentPlan plan) => plan.Timing.AbsoluteDuration < 0.0001f;
-
-        private void DrawZeroDurationMarker(MeshGenerationContext ctx, SegmentPlan plan, VisualElement root)
+        private void DrawZeroDurationMarker(MeshGenerationContext ctx, SegmentSelectionModel model, VisualElement root)
         {
             var painter = ctx.painter2D;
             float w = root.resolvedStyle.width;
@@ -2055,10 +2034,10 @@ namespace TimboJimboEditor.Sequencer
             if (w <= 0f || h <= 0f)
                 return;
 
-            var colors = GetBlockColors(plan);
+            var editor = SegmentBlockEditorRegistry.GetEditor(model.Segment);
+            var colors = editor.GetBlockColors(model.Segment);
             float cx = w * 0.5f;
 
-            // Vertical line
             painter.strokeColor = colors.border;
             painter.lineWidth = 2f;
             painter.BeginPath();
@@ -2066,7 +2045,6 @@ namespace TimboJimboEditor.Sequencer
             painter.LineTo(new Vector2(cx, h));
             painter.Stroke();
 
-            // Top chevron — points DOWN (inward)
             float triW = 8f;
             float triH = 6f;
             painter.fillColor = colors.border;
@@ -2077,7 +2055,6 @@ namespace TimboJimboEditor.Sequencer
             painter.ClosePath();
             painter.Fill();
 
-            // Bottom chevron — points UP (inward)
             painter.BeginPath();
             painter.MoveTo(new Vector2(cx - triW * 0.5f, h));
             painter.LineTo(new Vector2(cx + triW * 0.5f, h));

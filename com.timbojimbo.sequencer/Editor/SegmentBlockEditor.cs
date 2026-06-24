@@ -1,110 +1,28 @@
 using System;
-using System.Collections.Generic;
 using TimboJimbo.Core.Utility;
 using TimboJimbo.Sequencer;
-using TimboJimbo.Sequencer.Segments;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.Pool;
 using UnityEngine.UIElements;
 
 namespace TimboJimboEditor.Sequencer
 {
     [AttributeUsage(AttributeTargets.Class, Inherited = false)]
-    public sealed class CustomSegmentEditorAttribute : Attribute
+    public sealed class CustomSegmentBlockEditorAttribute : Attribute
     {
         public Type InspectedType { get; }
 
-        public CustomSegmentEditorAttribute(Type inspectedType)
+        public CustomSegmentBlockEditorAttribute(Type inspectedType)
         {
             InspectedType = inspectedType;
         }
     }
 
     /// <summary>
-    /// Custom editor for a <see cref="Segment"/> type.
-    /// <para>
-    /// The hosting window handles <c>SerializedObject.Update()</c> before and
-    /// <c>ApplyModifiedProperties()</c> after each call — implementations just
-    /// draw fields and the window detects changes automatically.
-    /// </para>
+    /// Custom block editor for a <see cref="Segment"/> type.
     /// </summary>
-    public class SegmentEditor
+    public class SegmentBlockEditor
     {
-        private static int _selectionHash = 0;
-        private static SerializedObject _selectionSegmentHolderSo;
-        private static SegmentHolder[] _activeSegmentHolders = Array.Empty<SegmentHolder>();
-
-        /// <summary>Draw the inspector panel for <paramref name="segment"/>.</summary>
-        public virtual void OnInspectorGUI(SerializedProperty property) => DrawDefaultFields(property);
-        public void OnInspectorGUI(IReadOnlyList<SerializedProperty> properties)
-        {
-            var currentHash = GetListHash();
-            if (currentHash != _selectionHash)
-            {
-                foreach (var harness in _activeSegmentHolders)
-                    UnityEngine.Object.DestroyImmediate(harness);
-
-                _selectionSegmentHolderSo?.Dispose();
-
-                _activeSegmentHolders = new SegmentHolder[properties.Count];
-
-                for (int i = 0; i < properties.Count; i++)
-                {
-                    var harness = ScriptableObject.CreateInstance<SegmentHolder>();
-                    _activeSegmentHolders[i] = harness;
-                }
-
-                _selectionSegmentHolderSo = new SerializedObject(_activeSegmentHolders);
-                _selectionHash = currentHash;
-            }
-
-            //re-sync the harnesses with the selected segments
-            for (int i = 0; i < properties.Count; i++)
-            {
-                _activeSegmentHolders[i].Segment = JsonUtility.FromJson(JsonUtility.ToJson(properties[i].boxedValue), properties[i].boxedValue.GetType()) as Segment;
-            }
-            
-            _selectionSegmentHolderSo.Update();
-
-            var segmentsProp = _selectionSegmentHolderSo.FindProperty("Segment");
-            OnInspectorGUI(segmentsProp);
-
-            if (_selectionSegmentHolderSo.ApplyModifiedProperties())
-            {
-                for (int i = 0; i < properties.Count; i++)
-                {
-                    //walk and copy each field that was modified. (modified fields will NOT have mixed values)
-                    var copy = segmentsProp.Copy();
-                    var end = segmentsProp.GetEndProperty();
-
-                    while (copy.NextVisible(true) && !SerializedProperty.EqualContents(copy, end))
-                    {
-                        var relativePath = copy.propertyPath.Replace("Segment.", "");
-                        var targetProp = properties[i].FindPropertyRelative(relativePath);
-
-                        if (targetProp != null && !copy.hasMultipleDifferentValues)
-                            targetProp.boxedValue = copy.boxedValue;
-                    }
-                }
-            }
-            
-            int GetListHash()
-            {
-                unchecked
-                {
-                    var hash = 23;
-                    hash = hash * 31 + properties.Count;
-                    hash = hash * 31 + properties[0].serializedObject.targetObject.GetEntityId();
-
-                    foreach (var property in properties)
-                        hash = hash * 31 + property.propertyPath.GetHashCode();
-
-                    return hash;
-                }
-            }
-        }
-
         /// <summary>Populate the block overlay inside the timeline canvas.</summary>
         public virtual void OnBlockGUI(Segment segment, VisualElement block) => DefaultBlockGUI(segment, block);
 
@@ -114,7 +32,7 @@ namespace TimboJimboEditor.Sequencer
         public virtual (Color fill, Color border) GetBlockColors(Segment segment)
         {
             var (defaultFill, defaultBorder) = (new Color(0.30f, 0.20f, 0.14f), new Color(0.58f, 0.40f, 0.28f));
-            
+
             var seed = GetBlockColorSeed(segment);
             return (
                 ColorFromSeed(defaultFill, seed, false),
@@ -129,30 +47,10 @@ namespace TimboJimboEditor.Sequencer
                 h = Mathf.Repeat(seed / (float)int.MaxValue, 1f) * 360f;
 
                 if (isBorder) l *= 1.025f;
-                    
+
                 return ColorExtra.OkLChToRGB(l, c, h);
             }
         }
-
-        /// <summary>Helper: draws every visible child field of <paramref name="property"/>.</summary>
-        protected static void DrawDefaultFields(SerializedProperty property)
-        {
-            var iterator = property.Copy();
-            var end = property.GetEndProperty();
-            int childDepth = property.depth + 1;
-            bool enterChildren = true;
-
-            while (iterator.NextVisible(enterChildren) &&
-                !SerializedProperty.EqualContents(iterator, end))
-            {
-                enterChildren = false;
-                if (iterator.depth != childDepth)
-                    continue;
-
-                EditorGUILayout.PropertyField(iterator, true);
-            }
-        }
-
         protected static void DefaultBlockGUI(Segment segment, VisualElement block)
         {
             var nicifiedName = ObjectNames.NicifyVariableName(segment.GetType().Name);
@@ -164,7 +62,6 @@ namespace TimboJimboEditor.Sequencer
                 {
                     marginLeft = 4,
                     marginTop = 2,
-                    fontSize = 10,
                     unityFontStyleAndWeight = FontStyle.Bold,
                     color = new Color(0.85f, 0.88f, 0.95f),
                     overflow = Overflow.Hidden,
@@ -198,9 +95,6 @@ namespace TimboJimboEditor.Sequencer
 
             float parentStart = plan.Timing.AbsoluteStartTime;
             float parentDuration = Mathf.Max(plan.Timing.AbsoluteDuration, 0.0001f);
-
-            // Same greedy lane packing logic as top-level blocks, but in local
-            // pixel space inside the ghost host.
 
             var packed = TimelineEditorUtility.PackIntoLanes(
                 children,
@@ -282,12 +176,5 @@ namespace TimboJimboEditor.Sequencer
                 return hash;
             }
         }
-        
-        private class SegmentHolder : ScriptableObject
-        {
-            [SerializeReference]
-            public Segment Segment = new Sequence();
-        }
-
     }
 }

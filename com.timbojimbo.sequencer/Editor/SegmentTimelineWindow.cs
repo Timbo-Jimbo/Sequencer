@@ -205,6 +205,9 @@ namespace TimboJimboEditor.Sequencer
             _canvas.SeekRequested += OnSeekRequested;
             _canvas.CopyRequested += OnCopyRequested;
             _canvas.PasteRequested += OnPasteRequested;
+            _canvas.StackSelectionRequested += StackSelectedSegmentsEndToEnd;
+            _canvas.AlignSelectionStartsRequested += AlignSelectedSegmentsByStart;
+            _canvas.AlignSelectionEndsRequested += AlignSelectedSegmentsByEnd;
             rootVisualElement.Add(_canvas);
 
             _canvasBorderOverlay = new VisualElement
@@ -395,6 +398,45 @@ namespace TimboJimboEditor.Sequencer
                 Selection.objects = pastedModels.Cast<UnityEngine.Object>().ToArray();
                 SyncCanvasSelection();
             }
+        }
+
+        private void StackSelectedSegmentsEndToEnd()
+        {
+            var selected = GetSelectedModelsForProvider();
+
+            if (selected.Count < 2)
+                return;
+
+            _sessionState.StackSegmentsEndToEnd(selected);
+        }
+
+        private void AlignSelectedSegmentsByStart()
+        {
+            var selected = GetSelectedModelsForProvider();
+            if (selected.Count < 2)
+                return;
+
+            _sessionState.AlignSegmentsByStart(selected);
+        }
+
+        private void AlignSelectedSegmentsByEnd()
+        {
+            var selected = GetSelectedModelsForProvider();
+            if (selected.Count < 2)
+                return;
+
+            _sessionState.AlignSegmentsByEnd(selected);
+        }
+
+        private List<SegmentSelectionModel> GetSelectedModelsForProvider()
+        {
+            if (Provider == null)
+                return new List<SegmentSelectionModel>();
+
+            return Selection.objects
+                .OfType<SegmentSelectionModel>()
+                .Where(m => m != null && ReferenceEquals(m.Handle.Provider, Provider))
+                .ToList();
         }
 
         private void EnsurePreviewSession()
@@ -653,6 +695,8 @@ namespace TimboJimboEditor.Sequencer
                 {
                     consumingSegment = model.Segment;
                     consumingRecorder = recorder;
+                    cursor = model.EndTime;
+                    SeekDisplayTime(cursor);
                     break;
                 }
             }
@@ -678,8 +722,6 @@ namespace TimboJimboEditor.Sequencer
                 if (associatedModel != null)
                 {
                     TimelineSessionState.CommitChanges(new[] { associatedModel });
-                    Selection.objects = new[] { associatedModel };
-                    SyncCanvasSelection();
                 }
                 return;
             }
@@ -717,13 +759,6 @@ namespace TimboJimboEditor.Sequencer
 
             _recordedEdits[edit.BindableProperty] = new RecordedEdit { Segment = newSegment, Created = true };
             _sessionState.Refresh();
-
-            var newModel = _sessionState.Models.Find(m => ReferenceEquals(m.Segment, newSegment));
-            if (newModel != null)
-            {
-                Selection.objects = new[] { newModel };
-                SyncCanvasSelection();
-            }
         }
 
         private void RestoreRecordingSnapshot()

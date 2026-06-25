@@ -179,6 +179,85 @@ namespace TimboJimboEditor.Sequencer
             CommitChanges(proxiesToCommit);
         }
 
+        public void StackSegmentsEndToEnd(IReadOnlyList<SegmentSelectionModel> segmentModels)
+        {
+            var orderedModels = GetOrderedSelectedModels(segmentModels);
+
+            if (orderedModels.Count < 2)
+                return;
+
+            float nextStartTime = orderedModels[0].StartTime;
+            var modelsToCommit = new List<SegmentSelectionModel>(orderedModels.Count);
+
+            for (int i = 0; i < orderedModels.Count; i++)
+            {
+                var model = orderedModels[i];
+                if (!model.CanAdjustStartTime)
+                {
+                    nextStartTime = Mathf.Max(nextStartTime, model.EndTime);
+                    continue;
+                }
+
+                model.StartTime = nextStartTime;
+                modelsToCommit.Add(model);
+                nextStartTime = model.EndTime;
+            }
+
+            CommitChanges(modelsToCommit);
+        }
+
+        public void AlignSegmentsByStart(IReadOnlyList<SegmentSelectionModel> segmentModels)
+        {
+            var orderedModels = GetOrderedSelectedModels(segmentModels);
+            if (orderedModels.Count < 2)
+                return;
+
+            float anchorStart = orderedModels[0].StartTime;
+            CommitAlignedStartTimes(orderedModels, _ => anchorStart);
+        }
+
+        public void AlignSegmentsByEnd(IReadOnlyList<SegmentSelectionModel> segmentModels)
+        {
+            var orderedModels = GetOrderedSelectedModels(segmentModels);
+            if (orderedModels.Count < 2)
+                return;
+
+            float anchorEnd = orderedModels.Max(m => m.EndTime);
+            CommitAlignedStartTimes(orderedModels, model => anchorEnd - model.Duration);
+        }
+
+        private List<SegmentSelectionModel> GetOrderedSelectedModels(IReadOnlyList<SegmentSelectionModel> segmentModels)
+        {
+            if (segmentModels == null || segmentModels.Count < 2)
+                return new List<SegmentSelectionModel>();
+
+            return segmentModels
+                .Where(m => m != null && ReferenceEquals(m.Handle.Provider, Provider))
+                .GroupBy(m => m.Handle.Index)
+                .Select(g => g.First())
+                .OrderBy(m => m.StartTime)
+                .ThenBy(m => m.Handle.Index)
+                .ToList();
+        }
+
+        private static void CommitAlignedStartTimes(
+            IReadOnlyList<SegmentSelectionModel> orderedModels,
+            Func<SegmentSelectionModel, float> getTargetStartTime)
+        {
+            var modelsToCommit = new List<SegmentSelectionModel>(orderedModels.Count);
+            for (int i = 0; i < orderedModels.Count; i++)
+            {
+                var model = orderedModels[i];
+                if (!model.CanAdjustStartTime)
+                    continue;
+
+                model.StartTime = getTargetStartTime(model);
+                modelsToCommit.Add(model);
+            }
+
+            CommitChanges(modelsToCommit);
+        }
+
         public void AddSegment(Type type, float time)
         {
             if (Provider == null || Provider.Sequence == null)

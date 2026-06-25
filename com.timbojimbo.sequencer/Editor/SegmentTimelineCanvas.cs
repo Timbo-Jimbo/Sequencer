@@ -27,7 +27,7 @@ namespace TimboJimboEditor.Sequencer
         private static readonly Color PreviewAccent = new Color(0.173f, 0.471f, 0.922f, 1.000f);
 
         private enum DragKind { None, ResizeLeft, ResizeRight, Move }
-        private enum PointerSessionMode { BackgroundPress, BlockPress, SelectionPress, Marquee, Transform, Scrub, Pan }
+        private enum PointerSessionMode { BackgroundPress, BlockPress, SelectionPress, Marquee, Transform, TransformSkew, Scrub, Pan }
 
         public Action<IReadOnlyList<SegmentSelectionModel>> SelectionChanged;
         public Action<IReadOnlyList<(SegmentSelectionModel model, float start, float duration)>> TimeAdjustmentCommitted;
@@ -36,6 +36,9 @@ namespace TimboJimboEditor.Sequencer
         public Action<float> SeekRequested;
         public Action CopyRequested;
         public Action PasteRequested;
+        public Action StackSelectionRequested;
+        public Action AlignSelectionStartsRequested;
+        public Action AlignSelectionEndsRequested;
         public bool Snap = false;
         public IReadOnlyList<SegmentSelectionModel> SelectedModels => _selection.EffectiveSelection;
 
@@ -58,7 +61,9 @@ namespace TimboJimboEditor.Sequencer
 
         private SelectionTransformOperation _selectionTransform;
         private PointerSession _pointerSession;
-        private bool IsDraggingSelection => _pointerSession?.Mode == PointerSessionMode.Transform && _selectionTransform != null;
+        private bool IsDraggingSelection =>
+            _selectionTransform != null &&
+            (_pointerSession?.Mode == PointerSessionMode.Transform || _pointerSession?.Mode == PointerSessionMode.TransformSkew);
 
         private readonly struct SegmentSnapCandidate
         {
@@ -452,8 +457,10 @@ namespace TimboJimboEditor.Sequencer
             private readonly List<Entry> _entries;
             private readonly Dictionary<SegmentSelectionModel, GhostTiming> _ghostByModel;
             private bool _hasChanges;
+            private bool _canSkew;
 
             public bool HasChanges => _hasChanges;
+            public bool CanSkew => _canSkew;
 
             public SelectionTransformOperation(
                 DragKind kind,
@@ -472,6 +479,7 @@ namespace TimboJimboEditor.Sequencer
                 _entries = new List<Entry>();
                 _ghostByModel = new Dictionary<SegmentSelectionModel, GhostTiming>();
                 _hasChanges = false;
+                _canSkew = false;
 
                 if (selectedModels == null)
                     return;
@@ -486,9 +494,11 @@ namespace TimboJimboEditor.Sequencer
                     _entries.Add(entry);
                     _ghostByModel[model] = new GhostTiming(entry.Start, entry.Duration);
                 }
+
+                _canSkew = _entries.Count > 1;
             }
 
-            public void UpdateGhost(float dt)
+            public void UpdateLinear(float dt)
             {
                 if (_entries.Count == 0)
                     return;
@@ -563,6 +573,85 @@ namespace TimboJimboEditor.Sequencer
                     if (Mathf.Abs(newStart - entry.Start) > 0.0001f || Mathf.Abs(newDuration - entry.Duration) > 0.0001f)
                         _hasChanges = true;
                 }
+            }
+
+            public void UpdateSkew(float dt)
+            {
+                if (_entries.Count == 0)
+                    return;
+
+                if (!_canSkew)
+                {
+                    UpdateLinear(dt);
+                    return;
+                }
+
+                UpdateGhostSkew(dt);
+            }
+
+            private void UpdateGhostSkew(float dt)
+            {
+                float initialStart = InitialSelectionStart;
+                float initialDuration = Mathf.Max(InitialSelectionDuration, 0.0001f);
+                float initialEnd = initialStart + initialDuration;
+
+                float normalizedDelta = dt / initialDuration;
+                float k = Mathf.Exp(-normalizedDelta * 4f);
+                k = Mathf.Clamp(k, 0.02f, 50f);
+
+                _hasChanges = false;
+
+                for (int i = 0; i < _entries.Count; i++)
+                {
+                    var entry = _entries[i];
+                    float entryEnd = entry.Start + entry.Duration;
+
+                    float mappedStart = MapSkewedTime(entry.Start, initialStart, initialDuration, initialEnd, k);
+                    float mappedEnd = MapSkewedTime(entryEnd, initialStart, initialDuration, initialEnd, k);
+
+                    float newStart = entry.Start;
+                    float newDuration = entry.Duration;
+
+                    if (entry.CanAdjustStart && entry.CanAdjustDuration)
+                    {
+                        newStart = Mathf.Max(0f, mappedStart);
+                        newDuration = Mathf.Max(0.01f, mappedEnd - newStart);
+                    }
+                    else if (entry.CanAdjustStart)
+                    {
+                        newStart = Mathf.Max(0f, mappedStart);
+                        newDuration = entry.Duration;
+                    }
+                    else if (entry.CanAdjustDuration)
+                    {
+                        newStart = entry.Start;
+                        newDuration = Mathf.Max(0.01f, mappedEnd - newStart);
+                    }
+
+                    _ghostByModel[entry.Model] = new GhostTiming(newStart, newDuration);
+
+                    if (Mathf.Abs(newStart - entry.Start) > 0.0001f || Mathf.Abs(newDuration - entry.Duration) > 0.0001f)
+                        _hasChanges = true;
+                }
+            }
+
+            private static float MapSkewedTime(float time, float start, float duration, float end, float k)
+            {
+                if (duration <= 0.0001f)
+                    return time;
+
+                float u = Mathf.Clamp01((time - start) / duration);
+                if (u <= 0f)
+                    return start;
+                if (u >= 1f)
+                    return end;
+
+                float denom = u + (1f - u) * k;
+                if (denom <= 0.000001f)
+                    return start;
+
+                float skewed = u / denom;
+                return Mathf.Lerp(start, end, skewed);
             }
 
             public bool TryGetGhost(SegmentSelectionModel model, out float start, out float duration)
@@ -1059,6 +1148,23 @@ namespace TimboJimboEditor.Sequencer
                 selectionStartTime,
                 selectionDurationTime,
                 _selection.EffectiveSelection);
+            return true;
+        }
+
+        private bool TryBeginSelectionTransformSession(Vector2 worldPosition, int pointerId, bool startInSkewMode)
+        {
+            if (_pointerSession == null)
+                return false;
+
+            if (!BeginSelectionTransformFromPointer(worldPosition, pointerId))
+                return false;
+
+            bool useSkew = startInSkewMode && _selectionTransform != null && _selectionTransform.CanSkew;
+            _pointerSession.Mode = useSkew
+                ? PointerSessionMode.TransformSkew
+                : PointerSessionMode.Transform;
+
+            RebuildSnapTimes();
             return true;
         }
 
@@ -1598,7 +1704,8 @@ namespace TimboJimboEditor.Sequencer
                 bool clickedRuler = local.y <= RulerHeight;
                 if (clickedRuler)
                 {
-                    SeekRequested?.Invoke(XToTime(local.x));
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
                     BeginPointerSession(new PointerSession
                     {
                         Mode = PointerSessionMode.Scrub,
@@ -1700,7 +1807,8 @@ namespace TimboJimboEditor.Sequencer
                 case PointerSessionMode.Scrub:
                 {
                     var local = this.WorldToLocal(evt.position);
-                    SeekRequested?.Invoke(XToTime(local.x));
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
                     evt.StopPropagation();
                     return;
                 }
@@ -1712,11 +1820,7 @@ namespace TimboJimboEditor.Sequencer
                         return;
                     }
 
-                    if (BeginSelectionTransformFromPointer(_pointerSession.PointerStartWorld, evt.pointerId))
-                    {
-                        _pointerSession.Mode = PointerSessionMode.Transform;
-                        RebuildSnapTimes();
-                    }
+                    TryBeginSelectionTransformSession(_pointerSession.PointerStartWorld, evt.pointerId, evt.altKey);
 
                     evt.StopPropagation();
                     return;
@@ -1730,23 +1834,22 @@ namespace TimboJimboEditor.Sequencer
 
                     if (_pointerSession.BlockWasSelected || (!_pointerSession.Shift && !_pointerSession.Action))
                     {
-                        if (BeginSelectionTransformFromPointer(_pointerSession.PointerStartWorld, evt.pointerId))
-                        {
-                            _pointerSession.Mode = PointerSessionMode.Transform;
-                            RebuildSnapTimes();
-                        }
+                        TryBeginSelectionTransformSession(_pointerSession.PointerStartWorld, evt.pointerId, evt.altKey);
                     }
 
                     evt.StopPropagation();
                     return;
 
                 case PointerSessionMode.Transform:
+                case PointerSessionMode.TransformSkew:
                 {
                     float dx = evt.position.x - _selectionTransform.PointerStart.x;
                     float dt = dx / Mathf.Max(_pixelsPerSecond, 0.0001f);
 
+                    bool useSkew = _pointerSession.Mode == PointerSessionMode.TransformSkew;
+
                     bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
-                    if (shouldSnap && TryGetSnapAdjustedDelta(_selectionTransform.Kind, dt, out var snappedDt, out _))
+                    if (!useSkew && shouldSnap && TryGetSnapAdjustedDelta(_selectionTransform.Kind, dt, out var snappedDt, out _))
                     {
                         dt = snappedDt;
                     }
@@ -1755,7 +1858,10 @@ namespace TimboJimboEditor.Sequencer
                         HideSnapGuide();
                     }
 
-                    _selectionTransform.UpdateGhost(dt);
+                    if (useSkew)
+                        _selectionTransform.UpdateSkew(dt);
+                    else
+                        _selectionTransform.UpdateLinear(dt);
 
                     LayoutBlocksInLanes();
 
@@ -1823,7 +1929,8 @@ namespace TimboJimboEditor.Sequencer
                 {
                     var local = this.WorldToLocal(evt.position);
                     bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
-                    SeekRequested?.Invoke(SnapTime(XToTime(local.x), shouldSnap));
+                    SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
+                    HideSnapGuide();
 
                     EndPointerSession();
                     evt.StopPropagation();
@@ -1831,6 +1938,7 @@ namespace TimboJimboEditor.Sequencer
                 }
 
                 case PointerSessionMode.Transform:
+                case PointerSessionMode.TransformSkew:
                 {
                     if (_selectionTransform.HasChanges)
                     {
@@ -1927,10 +2035,19 @@ namespace TimboJimboEditor.Sequencer
         private void BuildContextMenu(ContextualMenuPopulateEvent evt)
         {
             var hit = FindBlockAt(evt);
+            int selectionCount = _selection.EffectiveSelection.Count;
 
-            if (hit != null || _selection.EffectiveSelection.Count > 0)
+            if (selectionCount > 1)
             {
-                evt.menu.AppendAction(_selection.EffectiveSelection.Count > 0 ? "Delete Selection" : "Delete Segment", _ =>
+                evt.menu.AppendAction("Arrange/Stack End-to-End", _ => StackSelectionRequested?.Invoke());
+                evt.menu.AppendAction("Arrange/Align Starts", _ => AlignSelectionStartsRequested?.Invoke());
+                evt.menu.AppendAction("Arrange/Align Ends", _ => AlignSelectionEndsRequested?.Invoke());
+                evt.menu.AppendSeparator();
+            }
+
+            if (hit != null || selectionCount > 0)
+            {
+                evt.menu.AppendAction(selectionCount > 0 ? "Delete Selection" : "Delete Segment", _ =>
                 {
                     var selected = _selection.EffectiveSelection;
                     if (selected.Count > 0)
@@ -1947,7 +2064,7 @@ namespace TimboJimboEditor.Sequencer
                 return;
 
             var local = this.WorldToLocal(evt.mousePosition);
-            float addTime = SnapTime(XToTime(local.x), shouldSnap: false);
+            float addTime = SnapPlaybackTime(XToTime(local.x), shouldSnap: false);
             for (int i = 0; i < addable.Count; i++)
             {
                 var addableEntry = addable[i];
@@ -1993,15 +2110,104 @@ namespace TimboJimboEditor.Sequencer
             return hits;
         }
 
-        private float SnapTime(float time, bool shouldSnap)
+        private float SnapPlaybackTime(float time, bool shouldSnap)
         {
             if (!shouldSnap)
+            {
+                HideSnapGuide();
                 return time;
+            }
+
+            float thresholdTime = SnapThresholdPx / Mathf.Max(_pixelsPerSecond, 0.0001f);
+
+            if (TryFindNearestPlayheadSnapTime(time, thresholdTime, out float pointSnappedTime))
+            {
+                SetSnapGuide(pointSnappedTime);
+                return pointSnappedTime;
+            }
+
+            HideSnapGuide();
 
             float increment = MajorTickStep() * 0.25f;
             if (increment <= 0f)
                 return time;
             return Mathf.Round(time / increment) * increment;
+        }
+
+        private bool TryFindNearestPlayheadSnapTime(float time, float threshold, out float snappedTime)
+        {
+            snappedTime = 0f;
+            float bestAbs = float.MaxValue;
+
+            for (int i = 0; i < _segmentSnapCandidates.Count; i++)
+            {
+                float candidateTime = _segmentSnapCandidates[i].Time;
+                float d = candidateTime - time;
+                float abs = Mathf.Abs(d);
+                if (abs <= threshold && abs < bestAbs)
+                {
+                    bestAbs = abs;
+                    snappedTime = candidateTime;
+                }
+            }
+
+            var selected = _selection.EffectiveSelection;
+            for (int i = 0; i < selected.Count; i++)
+            {
+                var model = selected[i];
+                if (model == null)
+                    continue;
+
+                {
+                    float candidateTime = model.StartTime;
+                    float d = candidateTime - time;
+                    float abs = Mathf.Abs(d);
+                    if (abs <= threshold && abs < bestAbs)
+                    {
+                        bestAbs = abs;
+                        snappedTime = candidateTime;
+                    }
+                }
+
+                {
+                    float candidateTime = model.EndTime;
+                    float d = candidateTime - time;
+                    float abs = Mathf.Abs(d);
+                    if (abs <= threshold && abs < bestAbs)
+                    {
+                        bestAbs = abs;
+                        snappedTime = candidateTime;
+                    }
+                }
+
+                var plan = model.Segment.GetPlan(null);
+                foreach (var childPlan in plan.Children)
+                {
+                    {
+                        float candidateTime = childPlan.Timing.AbsoluteStartTime;
+                        float d = candidateTime - time;
+                        float abs = Mathf.Abs(d);
+                        if (abs <= threshold && abs < bestAbs)
+                        {
+                            bestAbs = abs;
+                            snappedTime = candidateTime;
+                        }
+                    }
+
+                    {
+                        float candidateTime = childPlan.Timing.AbsoluteEndTime;
+                        float d = candidateTime - time;
+                        float abs = Mathf.Abs(d);
+                        if (abs <= threshold && abs < bestAbs)
+                        {
+                            bestAbs = abs;
+                            snappedTime = candidateTime;
+                        }
+                    }
+                }
+            }
+
+            return bestAbs != float.MaxValue;
         }
 
         private static bool IsZeroDuration(SegmentSelectionModel model) => model.Duration < 0.0001f;

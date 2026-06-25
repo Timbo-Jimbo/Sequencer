@@ -1212,25 +1212,40 @@ namespace TimboJimboEditor.Sequencer
 
         private void LayoutBlocksInLanes()
         {
-            var packed = LanePackingUtility.PackIntoLanes(
-                _blocks,
-                itemStart: block =>
+            var packed = LanePacker.Pack(
+                items: _blocks,
+                itemToInput: block =>
                 {
-                    var isZero = IsZeroDuration(block.Model);
-                    GetDisplayTiming(block.Model, out float referenceStart, out float referenceDuration);
-                    var start = isZero ? referenceStart - (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceStart;
-                    start = Mathf.Max(0f, start);
-                    return start;
+                    var editor = SegmentBlockEditorRegistry.GetEditor(block.Model.Segment);
+
+                    return new ()
+                    {
+                        Data = block,
+                        Start = GetBlockStart(),
+                        End = GetBlockEnd(),
+                        Group = editor.GetLanePackerGroup(block.Model.Segment),
+                    };
+
+                    float GetBlockStart()
+                    {
+                        var isZero = IsZeroDuration(block.Model);
+                        GetDisplayTiming(block.Model, out float referenceStart, out float referenceDuration);
+                        var start = isZero ? referenceStart - (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceStart;
+                        start = Mathf.Max(0f, start);
+                        return start;
+                    }
+
+                    float GetBlockEnd()
+                    {
+                        var isZero = IsZeroDuration(block.Model);
+                        GetDisplayTiming(block.Model, out float referenceStart, out float referenceDuration);
+                        float referenceEnd = referenceStart + referenceDuration;
+                        var end = isZero ? referenceEnd + (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceEnd;
+                        end = Mathf.Max(0f, end);
+                        return end;
+                    }
                 },
-                itemEnd: block =>
-                {
-                    var isZero = IsZeroDuration(block.Model);
-                    GetDisplayTiming(block.Model, out float referenceStart, out float referenceDuration);
-                    float referenceEnd = referenceStart + referenceDuration;
-                    var end = isZero ? referenceEnd + (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceEnd;
-                    end = Mathf.Max(0f, end);
-                    return end;
-                }
+                depenetrateAndCompact: true
             );
 
             for (int i = 0; i < packed.Count; i++)
@@ -1289,6 +1304,13 @@ namespace TimboJimboEditor.Sequencer
 
                 AddDistinct(model.StartTime);
                 AddDistinct(model.EndTime);
+
+                var plan = model.Segment.GetPlan(null);
+                foreach(var childPlan in plan.Children)
+                {
+                    AddDistinct(childPlan.Timing.AbsoluteStartTime);
+                    AddDistinct(childPlan.Timing.AbsoluteEndTime);
+                }
             }
         }
 

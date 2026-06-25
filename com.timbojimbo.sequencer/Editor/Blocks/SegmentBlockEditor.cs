@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using TimboJimbo.Core.Utility;
 using TimboJimbo.Sequencer;
 using UnityEditor;
@@ -24,6 +25,11 @@ namespace TimboJimboEditor.Sequencer.Blocks
         /// <summary>Populate the block overlay inside the timeline canvas.</summary>
         public virtual void OnBlockGUI(Segment segment, VisualElement block) => DefaultBlockGUI(segment, block);
 
+        public virtual LanePacker.Group GetLanePackerGroup(Segment segment) => new ()
+        {
+            GroupId = DeterministicHash(segment.GetType().FullName),
+            SubGroupId = GetBlockColorSeed(segment),
+        };
         protected virtual int GetBlockColorSeed(Segment segment) => 0;
 
         /// <summary>Return custom fill/border colours, or <c>default</c> to use built-in fallback.</summary>
@@ -94,10 +100,18 @@ namespace TimboJimboEditor.Sequencer.Blocks
             float parentStart = plan.Timing.AbsoluteStartTime;
             float parentDuration = Mathf.Max(plan.Timing.AbsoluteDuration, 0.0001f);
 
-            var packed = LanePackingUtility.PackIntoLanes(
-                children,
-                itemStart: child => child.Timing.AbsoluteStartTime - parentStart,
-                itemEnd: child => child.Timing.AbsoluteEndTime - parentStart
+            var editor = SegmentBlockEditorRegistry.GetEditorByType(plan.Segment.GetType());
+
+            var packed = LanePacker.Pack(
+                items: children,
+                itemToInput: plan => new()
+                {
+                    Data = plan,
+                    Group = editor.GetLanePackerGroup(plan.Segment),
+                    Start = plan.Timing.AbsoluteStartTime,
+                    End = plan.Timing.AbsoluteStartTime + plan.Timing.AbsoluteDuration,
+                },
+                depenetrateAndCompact: true
             );
 
             int laneCount = 1;

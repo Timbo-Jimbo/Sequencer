@@ -12,6 +12,7 @@ namespace TimboJimboEditor.Sequencer
         public float Time { get; private set; }
         public float Duration => Instance != null ? Instance.Duration : 0f;
         public bool IsDisposed { get; private set; }
+        public PlaybackRange PlaybackRange { get; private set; }
 
         public event Action Rebuilt;
         public event Action Disposed;
@@ -19,6 +20,7 @@ namespace TimboJimboEditor.Sequencer
         private SegmentPreviewSession(SequenceProvider provider)
         {
             Provider = provider;
+            PlaybackRange = new PlaybackRange(0f, 1f, true);
         }
 
         public static SegmentPreviewSession Acquire(SequenceProvider provider)
@@ -41,11 +43,21 @@ namespace TimboJimboEditor.Sequencer
             if (Provider == null)
                 return;
 
-            Instance = Provider.CreateInstance(isPreview: true);
+            Instance = Provider.CreateInstance(PlaybackRange, isPreview: true);
             Time = Mathf.Clamp(preservedTime, 0f, Duration);
             Instance.Scrub(Time);
             Rebuilt?.Invoke();
             SceneView.RepaintAll();
+        }
+
+        public void SetPlaybackRange(PlaybackRange playbackRange)
+        {
+            ThrowIfDisposed();
+
+            PlaybackRange = playbackRange.Normalize(Duration);
+
+            if (Instance != null)
+                Instance.SetPlaybackRange(PlaybackRange);
         }
 
         public void Seek(float time)

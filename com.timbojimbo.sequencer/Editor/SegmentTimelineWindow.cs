@@ -36,8 +36,11 @@ namespace TimboJimboEditor.Sequencer
         private bool _isSyncingSelection;
 
         private SegmentPreviewSession _previewSession;
-        private float _displayTime;
         private double _lastTickTime;
+
+        private TimelineRangeState _rangeState;
+        private FloatField _loopDelayField;
+        private double _loopResumeAtTime = -1d;
 
         private ToolbarToggle _recordToggle;
         private Label _recordingIndicator;
@@ -58,6 +61,12 @@ namespace TimboJimboEditor.Sequencer
         private bool IsPreviewing => _previewSession != null;
         private bool IsRecording => _editTracker != null;
         public SequenceProvider Provider => _sessionState?.Provider;
+
+        private float DisplayTime => _rangeState.Playhead;
+        private float ActivePlaybackRangeStart => _rangeState.RangeStart;
+        private float ActivePlaybackRangeEnd => _rangeState.RangeEnd;
+
+        private const float MinPlaybackRangeDuration = 0.01f;
 
         [MenuItem("Window/Segment Timeline")]
         public static void OpenFromMenu() => Open(Selection.activeGameObject != null
@@ -92,6 +101,10 @@ namespace TimboJimboEditor.Sequencer
             _sessionState = new TimelineSessionState();
             _sessionState.SessionRefreshed += OnSessionRefreshed;
 
+            _rangeState = CreateInstance<TimelineRangeState>();
+            _rangeState.hideFlags = HideFlags.HideAndDontSave;
+            _rangeState.Initialize(1f);
+
             BuildUi();
 
             Selection.selectionChanged += OnSelectionChanged;
@@ -117,6 +130,9 @@ namespace TimboJimboEditor.Sequencer
             _sessionState.SessionRefreshed -= OnSessionRefreshed;
             _sessionState.Dispose();
             _sessionState = null;
+
+            DestroyImmediate(_rangeState);
+            _rangeState = null;
 
             _serializedProvider?.Dispose();
             _serializedProvider = null;
@@ -155,6 +171,19 @@ namespace TimboJimboEditor.Sequencer
             toolbar.Add(_playToggle);
 
             toolbar.Add(new ToolbarButton(StopPreview) { text = "Stop" });
+
+            toolbar.Add(new ToolbarSpacer());
+            toolbar.Add(new Label("Loop Delay") { style = { marginLeft = 8f, unityTextAlign = TextAnchor.MiddleLeft } });
+            _loopDelayField = new FloatField { isDelayed = true, value = _rangeState.LoopDelaySeconds };
+            _loopDelayField.style.width = 72f;
+            _loopDelayField.RegisterValueChangedCallback(evt =>
+            {
+                Undo.RecordObject(_rangeState, "Set Loop Delay");
+                _rangeState.SetLoopDelay(evt.newValue);
+                _loopDelayField.SetValueWithoutNotify(_rangeState.LoopDelaySeconds);
+                EditorUtility.SetDirty(_rangeState);
+            });
+            toolbar.Add(_loopDelayField);
 
             _previewIndicator = new Label("Previewing")
             {
@@ -203,6 +232,8 @@ namespace TimboJimboEditor.Sequencer
             _canvas.DeleteRequested += OnDeleteRequested;
             _canvas.AddRequested += OnAddRequested;
             _canvas.SeekRequested += OnSeekRequested;
+            _canvas.PlaybackRangeChanged += OnCanvasPlaybackRangeChanged;
+            _canvas.PlaybackRangeResetRequested += OnCanvasPlaybackRangeResetRequested;
             _canvas.CopyRequested += OnCopyRequested;
             _canvas.PasteRequested += OnPasteRequested;
             _canvas.StackSelectionRequested += StackSelectedSegmentsEndToEnd;
@@ -229,6 +260,12 @@ namespace TimboJimboEditor.Sequencer
         {
             if (_isSyncingSelection)
                 return;
+
+            if (IsPreviewing || IsRecording)
+            {
+                SyncCanvasSelection();
+                return;
+            }
 
             var selectedModels = Selection.objects.OfType<SegmentSelectionModel>().ToList();
             var modelProvider = selectedModels.FirstOrDefault(m => m != null && m.Handle.Provider != null)?.Handle.Provider;
@@ -266,8 +303,10 @@ namespace TimboJimboEditor.Sequencer
             _serializedProvider?.Dispose();
             _serializedProvider = Provider != null ? new SerializedObject(Provider) : null;
 
-            _displayTime = 0f;
+            _loopResumeAtTime = -1d;
             _playToggle?.SetValueWithoutNotify(false);
+
+            _rangeState.Initialize(GetPlaybackDurationLimit());
             
             RefreshPlan();
             UpdatePreviewVisuals();
@@ -279,7 +318,7 @@ namespace TimboJimboEditor.Sequencer
             {
                 _canvas.SetView(null, null);
                 _canvas.SetPreviewActive(false);
-                _canvas.SetTime(_displayTime);
+                _canvas.SetTime(DisplayTime);
                 UpdatePreviewVisuals();
                 return;
             }
@@ -293,7 +332,7 @@ namespace TimboJimboEditor.Sequencer
             {
                 _canvas.SetView(null, null);
                 _canvas.SetPreviewActive(false);
-                _canvas.SetTime(_displayTime);
+                _canvas.SetTime(DisplayTime);
                 return;
             }
 
@@ -304,17 +343,21 @@ namespace TimboJimboEditor.Sequencer
 
             _canvas.SetView(_sessionState.Models, currentSelectedModels);
 
+            EnsurePlaybackRange();
+
             if (IsPreviewing)
             {
+                _previewSession.SetPlaybackRange(_rangeState.GetPlaybackRange());
                 _previewSession.Rebuild();
-                _displayTime = Mathf.Min(_displayTime, _previewSession.Duration);
-                _previewSession.Seek(_displayTime);
+                _rangeState.SetPlayhead(DisplayTime, isPlaying: _playToggle.value);
+                _previewSession.Seek(DisplayTime);
                 if (_playToggle.value)
                     _previewSession.SetPlaying(true);
             }
 
             _canvas.SetPreviewActive(IsPreviewing);
-            _canvas.SetTime(_displayTime);
+            _canvas.SetTime(DisplayTime);
+            PushPlaybackRangeToCanvas();
             UpdatePreviewVisuals();
         }
 
@@ -384,7 +427,7 @@ namespace TimboJimboEditor.Sequencer
 
         private void OnPasteRequested()
         {
-            var pasted = _sessionState.TryPaste(_clipboard, _displayTime, IsPreviewing);
+            var pasted = _sessionState.TryPaste(_clipboard, DisplayTime, IsPreviewing);
             if (pasted == null || pasted.Count == 0)
                 return;
 
@@ -447,8 +490,9 @@ namespace TimboJimboEditor.Sequencer
             _previewSession = SegmentPreviewSession.Acquire(Provider);
             _previewSession.Rebuilt += OnSessionRebuilt;
             _previewSession.Disposed += OnSessionDisposed;
-            _displayTime = Mathf.Min(_displayTime, _previewSession.Duration);
-            _previewSession.Seek(_displayTime);
+            EnsurePlaybackRange();
+            _rangeState.SetPlayhead(DisplayTime, isPlaying: false);
+            _previewSession.Seek(DisplayTime);
             UpdatePreviewVisuals();
         }
 
@@ -461,18 +505,22 @@ namespace TimboJimboEditor.Sequencer
             _previewSession.Disposed -= OnSessionDisposed;
             _previewSession.Dispose();
             _previewSession = null;
+            _loopResumeAtTime = -1d;
             UpdatePreviewVisuals();
         }
 
         private void OnSessionRebuilt()
         {
-            _canvas.SetTime(_displayTime);
+            EnsurePlaybackRange();
+            _canvas.SetTime(DisplayTime);
+            PushPlaybackRangeToCanvas();
             Repaint();
         }
 
         private void OnSessionDisposed()
         {
             _previewSession = null;
+            _loopResumeAtTime = -1d;
             _playToggle.SetValueWithoutNotify(false);
             _canvas.SetPreviewActive(false);
             UpdatePreviewVisuals();
@@ -482,6 +530,7 @@ namespace TimboJimboEditor.Sequencer
         {
             if (!playing)
             {
+                _loopResumeAtTime = -1d;
                 if (IsPreviewing)
                     _previewSession.SetPlaying(false);
                 return;
@@ -495,11 +544,11 @@ namespace TimboJimboEditor.Sequencer
                 return;
             }
 
-            if (_displayTime >= _previewSession.Duration - 0.0001f)
-                _displayTime = 0f;
-
-            _previewSession.Seek(_displayTime);
+            EnsurePlaybackRange();
+            _rangeState.SetPlayhead(DisplayTime, isPlaying: true);
+            _previewSession.Seek(DisplayTime);
             _previewSession.SetPlaying(true);
+            _loopResumeAtTime = -1d;
             _lastTickTime = EditorApplication.timeSinceStartup;
         }
 
@@ -507,9 +556,10 @@ namespace TimboJimboEditor.Sequencer
         {
             StopRecording(commit: false);
             _playToggle.SetValueWithoutNotify(false);
+            _loopResumeAtTime = -1d;
             DisposePreviewSession();
-            _displayTime = 0f;
-            _canvas.SetTime(_displayTime);
+            _rangeState.SetPlayhead(0f, isPlaying: false);
+            _canvas.SetTime(DisplayTime);
         }
 
         private void OnSeekRequested(float time)
@@ -519,12 +569,13 @@ namespace TimboJimboEditor.Sequencer
 
         private void SeekDisplayTime(float time)
         {
-            _displayTime = Mathf.Max(0f, time);
             EnsurePreviewSession();
-            _previewSession.Seek(_displayTime);
+            _rangeState.SetPlayhead(time, isPlaying: false);
+            _previewSession.Seek(DisplayTime);
+            _loopResumeAtTime = -1d;
             _playToggle.SetValueWithoutNotify(false);
             _previewSession.SetPlaying(false);
-            _canvas.SetTime(_displayTime);
+            _canvas.SetTime(DisplayTime);
         }
 
         private void OnEditorUpdate()
@@ -533,18 +584,132 @@ namespace TimboJimboEditor.Sequencer
                 return;
 
             double now = EditorApplication.timeSinceStartup;
+
+            if (_loopResumeAtTime > 0d)
+            {
+                if (now < _loopResumeAtTime)
+                {
+                    _lastTickTime = now;
+                    return;
+                }
+
+                _loopResumeAtTime = -1d;
+                SeekForLoop(ActivePlaybackRangeStart);
+                _previewSession.SetPlaying(true);
+                _lastTickTime = now;
+                return;
+            }
+
             float dt = Mathf.Min((float)(now - _lastTickTime), 0.1f);
             _lastTickTime = now;
 
             _previewSession.Tick(dt);
-            _displayTime = _previewSession.Time;
-            _canvas.SetTime(_displayTime);
+            _rangeState.SetPlayhead(_previewSession.Time, isPlaying: true);
+            _canvas.SetTime(DisplayTime);
 
-            if (_displayTime >= _previewSession.Duration - 0.0001f)
+            EnsurePlaybackRange();
+            if (DisplayTime < ActivePlaybackRangeStart - 0.0001f)
             {
-                _previewSession.SetPlaying(false);
-                _playToggle.SetValueWithoutNotify(false);
+                SeekForLoop(ActivePlaybackRangeStart);
+                return;
             }
+
+            if (DisplayTime >= ActivePlaybackRangeEnd - 0.0001f)
+                BeginLoopWrap(now);
+        }
+
+        private void BeginLoopWrap(double now)
+        {
+            if (!IsPreviewing)
+                return;
+
+            _previewSession.SetPlaying(false);
+            SeekForLoop(ActivePlaybackRangeEnd);
+
+            if (_rangeState.LoopDelaySeconds <= 0.0001f)
+            {
+                SeekForLoop(ActivePlaybackRangeStart);
+                _previewSession.SetPlaying(true);
+                _loopResumeAtTime = -1d;
+                _lastTickTime = now;
+                return;
+            }
+
+            _loopResumeAtTime = now + _rangeState.LoopDelaySeconds;
+        }
+
+        private void SeekForLoop(float time)
+        {
+            if (!IsPreviewing)
+                return;
+
+            _rangeState.SetPlayhead(time, isPlaying: true);
+            _previewSession.Seek(DisplayTime);
+            _canvas.SetTime(DisplayTime);
+        }
+
+        private void OnCanvasPlaybackRangeChanged(float start, float end)
+        {
+            ApplyPlaybackRangeFromCanvas(start, end);
+        }
+
+        private void OnCanvasPlaybackRangeResetRequested()
+        {
+            Undo.RecordObject(_rangeState, "Reset Playback Range");
+            _rangeState.ResetToDefault(GetPlaybackDurationLimit());
+            EditorUtility.SetDirty(_rangeState);
+            EnsurePlaybackRange();
+
+            if (IsPreviewing)
+                _previewSession.SetPlaybackRange(_rangeState.GetPlaybackRange());
+        }
+
+        private void ApplyPlaybackRangeFromCanvas(float start, float end)
+        {
+            Undo.RecordObject(_rangeState, "Set Playback Range");
+            float duration = GetPlaybackDurationLimit();
+            _rangeState.SetRange(start, end, duration);
+            EnsurePlaybackRange();
+
+            if (IsPreviewing)
+            {
+                _previewSession.SetPlaybackRange(_rangeState.GetPlaybackRange());
+                _rangeState.SetPlayhead(DisplayTime, isPlaying: false);
+                _previewSession.Seek(DisplayTime);
+                _canvas.SetTime(DisplayTime);
+            }
+
+            EditorUtility.SetDirty(_rangeState);
+        }
+
+        private void EnsurePlaybackRange()
+        {
+            _rangeState.UpdateDuration(GetPlaybackDurationLimit());
+            PushPlaybackRangeToCanvas();
+        }
+
+        private float GetPlaybackDurationLimit()
+        {
+            float duration = 0f;
+            if (IsPreviewing)
+                duration = Mathf.Max(duration, _previewSession.Duration);
+
+            if (_sessionState?.Models != null)
+            {
+                for (int i = 0; i < _sessionState.Models.Count; i++)
+                    duration = Mathf.Max(duration, _sessionState.Models[i].EndTime);
+            }
+
+            return Mathf.Max(duration, MinPlaybackRangeDuration);
+        }
+
+        private void PushPlaybackRangeToCanvas()
+        {
+            if (_canvas == null)
+                return;
+
+            bool visible = Provider != null;
+            _canvas.SetPlaybackRange(_rangeState.RangeStart, _rangeState.RangeEnd, visible);
         }
 
         private void UpdatePreviewVisuals()
@@ -597,11 +762,11 @@ namespace TimboJimboEditor.Sequencer
             }
 
             _recordableProperties = new List<BindableProperty>();
-            BindablePropertyUtility.GetBindableProperties(Provider.gameObject, _recordableProperties, recursive: true);
+            BindablePropertyUtility.GetBindableProperties(Provider.Sequence.BindingRoot, _recordableProperties, recursive: true);
 
             _recordSnapshotValues.Clear();
             _recordCollection?.Dispose();
-            _recordCollection = PropertyBindingCollection.Bind(Provider.gameObject, _recordableProperties);
+            _recordCollection = PropertyBindingCollection.Bind(Provider.Sequence.BindingRoot, _recordableProperties);
             for (int i = 0; i < _recordableProperties.Count; i++)
             {
                 var property = _recordableProperties[i];
@@ -678,7 +843,7 @@ namespace TimboJimboEditor.Sequencer
 
         private void OnRecordedEdit(BindablePropertyValueEdit edit)
         {
-            float cursor = _displayTime;
+            float cursor = DisplayTime;
             if (cursor <= NearZeroRecordingEnd + 0.02f)
             {
                 cursor = NearZeroRecordingEnd;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using TimboJimboEditor.Sequencer.Blocks;
 using UnityEngine;
 using UnityEngine.Pool;
@@ -23,17 +24,23 @@ namespace TimboJimboEditor.Sequencer
         private const float OutlinePadding = 1f;
         private const float SnapThresholdPx = 20f;
         private const float TransformDragThresholdPx = 8f;
+        private const float PlaybackRangeHandlePx = 8f;
+        private const float MinPlaybackRangeDuration = 0.01f;
 
         private static readonly Color PreviewAccent = new Color(0.173f, 0.471f, 0.922f, 1.000f);
 
         private enum DragKind { None, ResizeLeft, ResizeRight, Move }
-        private enum PointerSessionMode { BackgroundPress, BlockPress, SelectionPress, Marquee, Transform, TransformSkew, Scrub, Pan }
+        private enum PointerSessionMode { BackgroundPress, BlockPress, SelectionPress, Marquee, Transform, TransformSkew, Scrub, Pan, PlaybackRangeStartDrag, PlaybackRangeEndDrag, PlaybackRangeMoveDrag }
 
         public Action<IReadOnlyList<SegmentSelectionModel>> SelectionChanged;
         public Action<IReadOnlyList<(SegmentSelectionModel model, float start, float duration)>> TimeAdjustmentCommitted;
         public Action<IReadOnlyList<SegmentSelectionModel>> DeleteRequested;
         public Action<Type, float> AddRequested;
         public Action<float> SeekRequested;
+        public Action<float, float> PlaybackRangeChanged;
+        public Action PlaybackRangeResetRequested;
+        public Action<float, float> PlaybackRangeGhostChanged;
+        public Action PlaybackRangeGhostEnded;
         public Action CopyRequested;
         public Action PasteRequested;
         public Action StackSelectionRequested;
@@ -49,6 +56,12 @@ namespace TimboJimboEditor.Sequencer
         private readonly List<Label> _rulerLabels = new();
         private readonly VisualElement _contentRoot;
         private readonly VisualElement _playhead;
+        private readonly VisualElement _playbackRangeBand;
+        private readonly VisualElement _playbackRangeStartHandle;
+        private readonly VisualElement _playbackRangeEndHandle;
+        private readonly VisualElement _playbackRangeGhostBand;
+        private readonly VisualElement _playbackRangeGhostStartHandle;
+        private readonly VisualElement _playbackRangeGhostEndHandle;
         private readonly VisualElement _snapGuide;
         private readonly VisualElement _selectionOutline;
         private readonly VisualElement _marqueeBox;
@@ -58,6 +71,12 @@ namespace TimboJimboEditor.Sequencer
         private float _pixelsPerSecond = 120f;
         private float _viewStart;
         private bool _viewWasEverFramed;
+        private float _playbackRangeStart;
+        private float _playbackRangeEnd = 1f;
+        private bool _showPlaybackRange;
+        private bool _showPlaybackRangeGhost;
+        private float _playbackRangeGhostStart;
+        private float _playbackRangeGhostEnd;
 
         private SelectionTransformOperation _selectionTransform;
         private PointerSession _pointerSession;
@@ -169,6 +188,8 @@ namespace TimboJimboEditor.Sequencer
             public Vector2 PointerStartLocal;
             public Vector2 PanStartPointer;
             public float PanStartView;
+            public float RangeStartAtPress;
+            public float RangeEndAtPress;
             public PlanBlock PressedBlock;
             public bool Shift;
             public bool Action;
@@ -752,6 +773,102 @@ namespace TimboJimboEditor.Sequencer
             };
             Add(_playhead);
 
+            _playbackRangeBand = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    height = RulerHeight,
+                    left = 0f,
+                    width = 0f,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.18f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeBand);
+
+            _playbackRangeStartHandle = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    width = 2f,
+                    left = 0f,
+                    height = RulerHeight,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.95f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeStartHandle);
+
+            _playbackRangeEndHandle = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    width = 2f,
+                    left = 0f,
+                    height = RulerHeight,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.95f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeEndHandle);
+
+            _playbackRangeGhostBand = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    height = RulerHeight,
+                    left = 0f,
+                    width = 0f,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.10f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeGhostBand);
+
+            _playbackRangeGhostStartHandle = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    width = 2f,
+                    left = 0f,
+                    height = RulerHeight,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.5f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeGhostStartHandle);
+
+            _playbackRangeGhostEndHandle = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    width = 2f,
+                    left = 0f,
+                    height = RulerHeight,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.5f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeGhostEndHandle);
+
             _snapGuide = new VisualElement
             {
                 style =
@@ -846,6 +963,15 @@ namespace TimboJimboEditor.Sequencer
             _previewActive = active;
             _playhead.style.display = active ? DisplayStyle.Flex : DisplayStyle.None;
             PositionPlayhead();
+        }
+
+        public void SetPlaybackRange(float start, float end, bool visible)
+        {
+            _playbackRangeStart = Mathf.Max(0f, start);
+            _playbackRangeEnd = Mathf.Max(_playbackRangeStart + MinPlaybackRangeDuration, end);
+            _showPlaybackRange = visible;
+            PositionPlaybackRangeVisuals();
+            MarkDirtyRepaint();
         }
 
         private void RebuildBlocks()
@@ -1103,6 +1229,7 @@ namespace TimboJimboEditor.Sequencer
             if (_marqueeBox.style.display != DisplayStyle.None)
                 _marqueeBox.style.display = DisplayStyle.None;
 
+            EndPlaybackRangeGhostSession(notifyEnded: true);
             HideSnapGuide();
             EndPointerSession();
         }
@@ -1287,6 +1414,7 @@ namespace TimboJimboEditor.Sequencer
 
             LayoutBlocksInLanes();
             PositionPlayhead();
+            PositionPlaybackRangeVisuals();
             UpdateSelectionOutline();
 
             RebuildRulerLabels();
@@ -1301,6 +1429,67 @@ namespace TimboJimboEditor.Sequencer
             _playhead.style.left = TimeToX(_time) - 1f;
             _playhead.style.top = 0f;
             _playhead.style.height = Mathf.Max(0f, resolvedStyle.height);
+        }
+
+        private void PositionPlaybackRangeVisuals()
+        {
+            if (_playbackRangeBand == null || _playbackRangeStartHandle == null || _playbackRangeEndHandle == null)
+                return;
+
+            if (!_showPlaybackRange)
+            {
+                _playbackRangeBand.style.display = DisplayStyle.None;
+                _playbackRangeStartHandle.style.display = DisplayStyle.None;
+                _playbackRangeEndHandle.style.display = DisplayStyle.None;
+                _playbackRangeGhostBand.style.display = DisplayStyle.None;
+                _playbackRangeGhostStartHandle.style.display = DisplayStyle.None;
+                _playbackRangeGhostEndHandle.style.display = DisplayStyle.None;
+                return;
+            }
+
+            float startX = TimeToX(_playbackRangeStart);
+            float endX = TimeToX(_playbackRangeEnd);
+            if (endX < startX)
+                (startX, endX) = (endX, startX);
+
+            _playbackRangeBand.style.left = startX;
+            _playbackRangeBand.style.width = Mathf.Max(1f, endX - startX);
+            _playbackRangeBand.style.height = RulerHeight;
+            _playbackRangeBand.style.display = DisplayStyle.Flex;
+
+            _playbackRangeStartHandle.style.left = startX - 1f;
+            _playbackRangeStartHandle.style.height = RulerHeight;
+            _playbackRangeStartHandle.style.display = DisplayStyle.Flex;
+
+            _playbackRangeEndHandle.style.left = endX - 1f;
+            _playbackRangeEndHandle.style.height = RulerHeight;
+            _playbackRangeEndHandle.style.display = DisplayStyle.Flex;
+
+            if (!_showPlaybackRangeGhost)
+            {
+                _playbackRangeGhostBand.style.display = DisplayStyle.None;
+                _playbackRangeGhostStartHandle.style.display = DisplayStyle.None;
+                _playbackRangeGhostEndHandle.style.display = DisplayStyle.None;
+                return;
+            }
+
+            float ghostStartX = TimeToX(_playbackRangeGhostStart);
+            float ghostEndX = TimeToX(_playbackRangeGhostEnd);
+            if (ghostEndX < ghostStartX)
+                (ghostStartX, ghostEndX) = (ghostEndX, ghostStartX);
+
+            _playbackRangeGhostBand.style.left = ghostStartX;
+            _playbackRangeGhostBand.style.width = Mathf.Max(1f, ghostEndX - ghostStartX);
+            _playbackRangeGhostBand.style.height = RulerHeight;
+            _playbackRangeGhostBand.style.display = DisplayStyle.Flex;
+
+            _playbackRangeGhostStartHandle.style.left = ghostStartX - 1f;
+            _playbackRangeGhostStartHandle.style.height = RulerHeight;
+            _playbackRangeGhostStartHandle.style.display = DisplayStyle.Flex;
+
+            _playbackRangeGhostEndHandle.style.left = ghostEndX - 1f;
+            _playbackRangeGhostEndHandle.style.height = RulerHeight;
+            _playbackRangeGhostEndHandle.style.display = DisplayStyle.Flex;
         }
 
         private void SetSnapGuide(float time)
@@ -1704,6 +1893,24 @@ namespace TimboJimboEditor.Sequencer
                 bool clickedRuler = local.y <= RulerHeight;
                 if (clickedRuler)
                 {
+                    if (TryBeginPlaybackRangeResetSession(local, evt))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
+
+                    if (evt.altKey && TryBeginPlaybackRangeDragSession(local, evt))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
+
+                    if (evt.altKey && TryBeginPlaybackRangeMoveSession(local, evt, requireHitInsideRange: true))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
+
                     bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
                     SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
                     BeginPointerSession(new PointerSession
@@ -1713,6 +1920,12 @@ namespace TimboJimboEditor.Sequencer
                         PointerStartWorld = evt.position,
                         PointerStartLocal = local,
                     });
+                    evt.StopPropagation();
+                    return;
+                }
+
+                if (evt.altKey && TryBeginPlaybackRangeMoveSession(local, evt, requireHitInsideRange: false))
+                {
                     evt.StopPropagation();
                     return;
                 }
@@ -1809,6 +2022,51 @@ namespace TimboJimboEditor.Sequencer
                     var local = this.WorldToLocal(evt.position);
                     bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
                     SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.PlaybackRangeStartDrag:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    float time = SnapPlaybackTime(XToTime(local.x), shouldSnap);
+                    float baseEnd = _pointerSession.RangeEndAtPress;
+                    float clampedStart = Mathf.Clamp(time, 0f, baseEnd - MinPlaybackRangeDuration);
+                    UpdatePlaybackRangeGhost(clampedStart, baseEnd, notify: true);
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.PlaybackRangeEndDrag:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    float time = SnapPlaybackTime(XToTime(local.x), shouldSnap);
+                    float baseStart = _pointerSession.RangeStartAtPress;
+                    float clampedEnd = Mathf.Max(baseStart + MinPlaybackRangeDuration, time);
+                    UpdatePlaybackRangeGhost(baseStart, clampedEnd, notify: true);
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.PlaybackRangeMoveDrag:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    float rangeDuration = Mathf.Max(MinPlaybackRangeDuration, _pointerSession.RangeEndAtPress - _pointerSession.RangeStartAtPress);
+                    float dt = (local.x - _pointerSession.PointerStartLocal.x) / Mathf.Max(_pixelsPerSecond, 0.0001f);
+                    float movedStart = _pointerSession.RangeStartAtPress + dt;
+
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    if (shouldSnap)
+                        movedStart = SnapPlaybackTime(movedStart, true);
+                    else
+                        HideSnapGuide();
+
+                    var sequenceDuration = Mathf.Max(0f, _models.Count > 0 ? _models.Max(m => m.EndTime) : 0f);
+                    movedStart = Mathf.Clamp(movedStart, 0f, sequenceDuration - rangeDuration);
+ 
+                    UpdatePlaybackRangeGhost(movedStart, movedStart + rangeDuration, notify: true);
                     evt.StopPropagation();
                     return;
                 }
@@ -1932,6 +2190,24 @@ namespace TimboJimboEditor.Sequencer
                     SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
                     HideSnapGuide();
 
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.PlaybackRangeStartDrag:
+                case PointerSessionMode.PlaybackRangeEndDrag:
+                case PointerSessionMode.PlaybackRangeMoveDrag:
+                {
+                    if (_showPlaybackRangeGhost)
+                    {
+                        _playbackRangeStart = _playbackRangeGhostStart;
+                        _playbackRangeEnd = _playbackRangeGhostEnd;
+                        PlaybackRangeChanged?.Invoke(_playbackRangeStart, _playbackRangeEnd);
+                    }
+
+                    EndPlaybackRangeGhostSession(notifyEnded: true);
+                    HideSnapGuide();
                     EndPointerSession();
                     evt.StopPropagation();
                     return;
@@ -2211,6 +2487,120 @@ namespace TimboJimboEditor.Sequencer
         }
 
         private static bool IsZeroDuration(SegmentSelectionModel model) => model.Duration < 0.0001f;
+
+        private bool TryBeginPlaybackRangeResetSession(Vector2 local, PointerDownEvent evt)
+        {
+            if (!_showPlaybackRange)
+                return false;
+                
+            // if clicked anywhere in the playback range area with shift clicked, reset it
+            float startX = TimeToX(_playbackRangeStart);
+            float endX = TimeToX(_playbackRangeEnd);
+            if (local.x >= startX && local.x <= endX && evt.shiftKey)
+            {
+                PlaybackRangeResetRequested?.Invoke();
+                EndPlaybackRangeGhostSession(notifyEnded: true);
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryBeginPlaybackRangeDragSession(Vector2 local, PointerDownEvent evt)
+        {
+            if (!_showPlaybackRange)
+                return false;
+
+            float startX = TimeToX(_playbackRangeStart);
+            float endX = TimeToX(_playbackRangeEnd);
+            float threshold = PlaybackRangeHandlePx;
+
+            if (Mathf.Abs(local.x - startX) <= threshold)
+            {
+                BeginPointerSession(new PointerSession
+                {
+                    Mode = PointerSessionMode.PlaybackRangeStartDrag,
+                    PointerId = evt.pointerId,
+                    PointerStartWorld = evt.position,
+                    PointerStartLocal = local,
+                    RangeStartAtPress = _playbackRangeStart,
+                    RangeEndAtPress = _playbackRangeEnd,
+                });
+                BeginPlaybackRangeGhostSession();
+                return true;
+            }
+
+            if (Mathf.Abs(local.x - endX) <= threshold)
+            {
+                BeginPointerSession(new PointerSession
+                {
+                    Mode = PointerSessionMode.PlaybackRangeEndDrag,
+                    PointerId = evt.pointerId,
+                    PointerStartWorld = evt.position,
+                    PointerStartLocal = local,
+                    RangeStartAtPress = _playbackRangeStart,
+                    RangeEndAtPress = _playbackRangeEnd,
+                });
+                BeginPlaybackRangeGhostSession();
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryBeginPlaybackRangeMoveSession(Vector2 local, PointerDownEvent evt, bool requireHitInsideRange)
+        {
+            if (!_showPlaybackRange)
+                return false;
+
+            float startX = TimeToX(_playbackRangeStart);
+            float endX = TimeToX(_playbackRangeEnd);
+            if (endX < startX)
+                (startX, endX) = (endX, startX);
+
+            if (requireHitInsideRange && (local.x < startX || local.x > endX))
+                return false;
+
+            BeginPointerSession(new PointerSession
+            {
+                Mode = PointerSessionMode.PlaybackRangeMoveDrag,
+                PointerId = evt.pointerId,
+                PointerStartWorld = evt.position,
+                PointerStartLocal = local,
+                RangeStartAtPress = _playbackRangeStart,
+                RangeEndAtPress = _playbackRangeEnd,
+            });
+            BeginPlaybackRangeGhostSession();
+            return true;
+        }
+
+        private void BeginPlaybackRangeGhostSession()
+        {
+            _showPlaybackRangeGhost = true;
+            _playbackRangeGhostStart = _playbackRangeStart;
+            _playbackRangeGhostEnd = _playbackRangeEnd;
+            PositionPlaybackRangeVisuals();
+            PlaybackRangeGhostChanged?.Invoke(_playbackRangeGhostStart, _playbackRangeGhostEnd);
+        }
+
+        private void UpdatePlaybackRangeGhost(float start, float end, bool notify)
+        {
+            _showPlaybackRangeGhost = true;
+            _playbackRangeGhostStart = Mathf.Max(0f, start);
+            _playbackRangeGhostEnd = Mathf.Max(_playbackRangeGhostStart + MinPlaybackRangeDuration, end);
+            PositionPlaybackRangeVisuals();
+            if (notify)
+                PlaybackRangeGhostChanged?.Invoke(_playbackRangeGhostStart, _playbackRangeGhostEnd);
+        }
+
+        private void EndPlaybackRangeGhostSession(bool notifyEnded)
+        {
+            bool wasShowing = _showPlaybackRangeGhost;
+            _showPlaybackRangeGhost = false;
+            PositionPlaybackRangeVisuals();
+            if (wasShowing && notifyEnded)
+                PlaybackRangeGhostEnded?.Invoke();
+        }
 
         private void DrawZeroDurationMarker(MeshGenerationContext ctx, SegmentSelectionModel model, VisualElement root)
         {

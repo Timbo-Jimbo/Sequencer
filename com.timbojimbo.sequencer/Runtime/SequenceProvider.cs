@@ -3,6 +3,7 @@ using UnityEngine;
 
 namespace TimboJimbo.Sequencer
 {
+
     public class SequenceProvider : MonoBehaviour
     {
         public Sequence Sequence = new Sequence();
@@ -17,6 +18,12 @@ namespace TimboJimbo.Sequencer
         {
             EnsureSequence();
             return SequenceInstance.Create(Sequence, isPreview, restoreValuesOnDispose);
+        }
+
+        public SequenceInstance CreateInstance(PlaybackRange playbackRange, bool isPreview = false, bool restoreValuesOnDispose = true)
+        {
+            EnsureSequence();
+            return SequenceInstance.Create(Sequence, playbackRange, isPreview, restoreValuesOnDispose);
         }
 
         private void Reset()

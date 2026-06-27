@@ -17,11 +17,7 @@ namespace TimboJimbo.Sequencer
 
         private bool _isDisposed;
         private RuntimeState _runtime;
-        private bool _hasPlaybackRange;
         private PlaybackRange _playbackRange;
-        private float _playbackRangeStart;
-        private float _playbackRangeEnd;
-        private bool _hasReachedPlaybackRangeEnd;
 
         private const float TimeEpsilon = 0.00001f;
 
@@ -30,10 +26,7 @@ namespace TimboJimbo.Sequencer
         public bool IsPaused => _runtime != null && _runtime.IsPaused;
         public bool IsStopped => _runtime != null && _runtime.IsStopped;
         public bool IsPreview => _isPreview;
-        public bool HasPlaybackRange => _hasPlaybackRange;
         public PlaybackRange PlaybackRange => _playbackRange;
-
-        public event Action PlaybackRangeReachedEnd;
 
         public IReadOnlyList<SegmentPlayback> AllPlaybacks => _playbacks;
         public IReadOnlyCollection<SegmentPlayback> ActivePlaybacks => _runtime != null
@@ -42,12 +35,12 @@ namespace TimboJimbo.Sequencer
 
         public static SequenceInstance Create(Sequence root, bool isPreview = false, bool restoreValuesOnDispose = true)
         {
-            return new SequenceInstance(root, default, hasPlaybackRange: false, isPreview, restoreValuesOnDispose);
+            return new SequenceInstance(root, PlaybackRange.FullTimeline(), isPreview, restoreValuesOnDispose);
         }
 
         public static SequenceInstance Create(Sequence root, PlaybackRange playbackRange, bool isPreview = false, bool restoreValuesOnDispose = true)
         {
-            return new SequenceInstance(root, playbackRange, hasPlaybackRange: true, isPreview, restoreValuesOnDispose);
+            return new SequenceInstance(root, playbackRange, isPreview, restoreValuesOnDispose);
         }
 
         public static SequenceInstance Create(Segment rootSegment, bool isPreview = false, bool restoreValuesOnDispose = true)
@@ -56,7 +49,7 @@ namespace TimboJimbo.Sequencer
                 ? sequence
                 : new Sequence { Segments = new List<Segment> { rootSegment } };
 
-            return new SequenceInstance(rootSequence, default, hasPlaybackRange: false, isPreview, restoreValuesOnDispose);
+            return new SequenceInstance(rootSequence, PlaybackRange.FullTimeline(), isPreview, restoreValuesOnDispose);
         }
 
         public static SequenceInstance Create(Segment rootSegment, PlaybackRange playbackRange, bool isPreview = false, bool restoreValuesOnDispose = true)
@@ -65,10 +58,10 @@ namespace TimboJimbo.Sequencer
                 ? sequence
                 : new Sequence { Segments = new List<Segment> { rootSegment } };
 
-            return new SequenceInstance(rootSequence, playbackRange, hasPlaybackRange: true, isPreview, restoreValuesOnDispose);
+            return new SequenceInstance(rootSequence, playbackRange, isPreview, restoreValuesOnDispose);
         }
 
-        private SequenceInstance(Sequence root, PlaybackRange playbackRange, bool hasPlaybackRange, bool isPreview = false, bool restoreValuesOnDispose = true)
+        private SequenceInstance(Sequence root, PlaybackRange playbackRange, bool isPreview = false, bool restoreValuesOnDispose = true)
         {
             if (root == null)
                 throw new ArgumentNullException(nameof(root));
@@ -94,8 +87,7 @@ namespace TimboJimbo.Sequencer
                 timeEpsilon: TimeEpsilon,
                 duration: Duration);
 
-            if (hasPlaybackRange)
-                SetPlaybackRange(playbackRange);
+            SetPlaybackRange(playbackRange);
         }
 
         public void Tick(float dt)
@@ -105,16 +97,17 @@ namespace TimboJimbo.Sequencer
 
             using(BulkWriteAll.Scope(this))
             {
-                if (_hasPlaybackRange)
-                    PreparePlaybackRangeForTick();
+                var rangeStart = PlaybackRange.GetResolvedStart();
+                var rangeEnd = PlaybackRange.GetResolvedEnd(Duration);
 
-                if (_hasPlaybackRange)
-                    dt = Mathf.Min(dt, Mathf.Max(0f, _playbackRangeEnd - Playhead));
+                if (Playhead < rangeStart - TimeEpsilon)
+                    _runtime.Scrub(rangeStart);
 
+                dt = Mathf.Min(dt, Mathf.Max(0f, rangeEnd - Playhead));
                 _runtime.Tick(dt);
 
-                if (_hasPlaybackRange)
-                    HandlePlaybackRangeAfterTick();
+                if(!_runtime.IsStopped && Playhead >= rangeEnd - TimeEpsilon)
+                    _runtime.Pause();
             }
         }
 
@@ -132,8 +125,9 @@ namespace TimboJimbo.Sequencer
             if (_isDisposed)
                 return;
 
-            if (_hasPlaybackRange && Playhead < _playbackRangeStart - TimeEpsilon)
-                Scrub(_playbackRangeStart);
+            var rangeStart = PlaybackRange.GetResolvedStart();
+            if (Playhead < rangeStart - TimeEpsilon)
+                Scrub(rangeStart);
 
             using(BulkWriteAll.Scope(this))
                 _runtime.Resume();
@@ -156,21 +150,26 @@ namespace TimboJimbo.Sequencer
             using(BulkWriteAll.Scope(this))
             {
                 _runtime.Scrub(absolutePosition);
-                if (_hasPlaybackRange && absolutePosition < _playbackRangeEnd - TimeEpsilon)
-                    _hasReachedPlaybackRangeEnd = false;
             }
         }
 
-        public void SetPlaybackRange(PlaybackRange playbackRange)
+        public void SetPlaybackRange(PlaybackRange playbackRange, bool clampPlayheadToRange = true)
         {
             if (_isDisposed)
                 return;
 
-            _hasPlaybackRange = true;
             _playbackRange = playbackRange.Normalize(Duration);
-            _playbackRangeStart = _playbackRange.GetResolvedStart();
-            _playbackRangeEnd = _playbackRange.GetResolvedEnd(Duration);
-            _hasReachedPlaybackRangeEnd = false;
+
+            if(clampPlayheadToRange && _runtime is { IsPlaying: true })
+            {
+                var rangeStart = PlaybackRange.GetResolvedStart();
+                var rangeEnd = PlaybackRange.GetResolvedEnd(Duration);
+
+                if (Playhead < rangeStart - TimeEpsilon)
+                    _runtime.Scrub(rangeStart);
+                else if (Playhead > rangeEnd + TimeEpsilon)
+                    _runtime.Scrub(rangeEnd);
+            }
         }
 
         public void ClearPlaybackRange()
@@ -178,37 +177,7 @@ namespace TimboJimbo.Sequencer
             if (_isDisposed)
                 return;
 
-            _hasPlaybackRange = false;
-            _hasReachedPlaybackRangeEnd = false;
-        }
-
-        private void PreparePlaybackRangeForTick()
-        {
-            if (!_hasPlaybackRange)
-                return;
-
-            if (Playhead < _playbackRangeStart - TimeEpsilon)
-                _runtime.Scrub(_playbackRangeStart);
-        }
-
-        private void HandlePlaybackRangeAfterTick()
-        {
-            if (!_hasPlaybackRange)
-                return;
-
-            if (Playhead >= _playbackRangeEnd - TimeEpsilon)
-            {
-                if (_hasReachedPlaybackRangeEnd)
-                    return;
-
-                _hasReachedPlaybackRangeEnd = true;
-                _runtime.Scrub(_playbackRangeEnd);
-                _runtime.Pause();
-                PlaybackRangeReachedEnd?.Invoke();
-                return;
-            }
-
-            _hasReachedPlaybackRangeEnd = false;
+            SetPlaybackRange(PlaybackRange.FullTimeline(), clampPlayheadToRange: false);
         }
 
         private void CollectBindingsAndRestoreValues(SegmentPlan rootPlan)
@@ -428,6 +397,7 @@ namespace TimboJimbo.Sequencer
             public float Playhead => _playhead;
             public bool IsPaused => _isPaused;
             public bool IsStopped => _isStopped;
+            public bool IsPlaying => !_isPaused && !_isStopped;
 
             public IReadOnlyCollection<SegmentPlayback> ActivePlaybacks => _activePlaybacks;
 

@@ -6,22 +6,20 @@ namespace TimboJimbo.Sequencer
     [Serializable]
     public struct PlaybackRange
     {
-        public const float MinDuration = 0.01f;
-
-        [SerializeField] public float Start;
-        [SerializeField] public float End;
-        [SerializeField] public bool EndAnchoredToTimelineEnd;
+        public float Start;
+        public float End;
+        public bool EndAnchoredToTimelineEnd;
 
         public PlaybackRange(float start, float end, bool endAnchoredToTimelineEnd = false)
         {
             Start = Mathf.Max(0f, start);
-            End = Mathf.Max(Start + MinDuration, end);
+            End = Mathf.Max(Start, end);
             EndAnchoredToTimelineEnd = endAnchoredToTimelineEnd;
         }
 
-        public static PlaybackRange FullTimeline(float timelineDuration)
+        public static PlaybackRange FullTimeline()
         {
-            return new PlaybackRange(0f, Mathf.Max(MinDuration, timelineDuration), endAnchoredToTimelineEnd: true);
+            return new PlaybackRange(0f, 1f, endAnchoredToTimelineEnd: true);
         }
 
         public float GetResolvedStart() => Mathf.Max(0f, Start);
@@ -30,17 +28,17 @@ namespace TimboJimbo.Sequencer
         {
             float start = GetResolvedStart();
             float end = EndAnchoredToTimelineEnd ? timelineDuration : End;
-            return Mathf.Max(start + MinDuration, end);
+            return Mathf.Max(start, end);
         }
 
         public PlaybackRange Normalize(float timelineDuration)
         {
             float start = Mathf.Max(0f, Start);
             float end = EndAnchoredToTimelineEnd ? timelineDuration : End;
-            end = Mathf.Max(start + MinDuration, end);
+            end = Mathf.Max(start, end);
 
             if (!EndAnchoredToTimelineEnd)
-                end = Mathf.Min(end, Mathf.Max(start + MinDuration, timelineDuration));
+                end = Mathf.Min(end, Mathf.Max(start, timelineDuration));
 
             return new PlaybackRange(start, end, EndAnchoredToTimelineEnd);
         }

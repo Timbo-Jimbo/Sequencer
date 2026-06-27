@@ -103,20 +103,20 @@ namespace TimboJimbo.Sequencer.Segments
                 if(StartMode == EasedStartMode.StartFromAbsolute)
                 {
                     //are we the first segment to write to this property?
-                    var isFirst = true;
+                    SegmentPlayback earliestPlayback = null;
                     foreach (var playback in context.Sequence.AllPlaybacks)
                     {
-                        if (playback == this)
-                            break;
-
-                        if (playback is Playback p && p.Property == Property)
+                        if (
+                            playback is Playback p && 
+                            p.Property == Property && 
+                            (earliestPlayback == null || playback.AbsoluteStartTime < earliestPlayback.AbsoluteStartTime)
+                        )
                         {
-                            isFirst = false;
-                            break;
+                            earliestPlayback = playback;
                         }
                     }
 
-                    if (isFirst)
+                    if (earliestPlayback == this)
                     {
                         // if so, we need to ensure the start value is correct from the outset
                         //otherwise we will get a pop at the start of this segment.

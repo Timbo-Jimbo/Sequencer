@@ -29,8 +29,10 @@ namespace TimboJimboEditor.Sequencer.Blocks
                 pickingMode = PickingMode.Ignore,
             };
 
-            if (tweener.Property.Target is Object obj)
+            if (tweener.Property.IsValid)
             {
+                var obj = tweener.Property.Target;
+
                 var compName = ObjectNames.NicifyVariableName(obj.GetType().Name);
                 var textColumn = new VisualElement
                 {
@@ -105,7 +107,7 @@ namespace TimboJimboEditor.Sequencer.Blocks
             }
             else
             {
-                row.Add(new Label("(no property)")
+                row.Add(new Label("Property Tweener")
                 {
                     style =
                     {
@@ -133,7 +135,7 @@ namespace TimboJimboEditor.Sequencer.Blocks
 
         protected override int GetBlockColorSeed(Segment segment)
         {
-            if (segment is not PropertyTweener tweener || tweener.Property.Target is not Object obj)
+            if (segment is not PropertyTweener tweener || !tweener.Property.IsValid || tweener.Property.Target is not Object obj)
                 return base.GetBlockColorSeed(segment);
 
             return DeterministicHash($"{obj.GetType().FullName} ({tweener.Property.Path})");

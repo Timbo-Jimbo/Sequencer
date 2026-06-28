@@ -27,6 +27,7 @@ namespace TimboJimboEditor.Sequencer.Segments
 
             EditorGUILayout.PropertyField(startTimeProp);
             EditorGUILayout.PropertyField(durationProp);
+            DrawPropertyField(bindablePropertyProp, propertyKindProp, startValueProp, endValueProp);
             EditorGUILayout.PropertyField(easeProp);
             GUILayout.Space(8);
 
@@ -61,6 +62,80 @@ namespace TimboJimboEditor.Sequencer.Segments
 
             GUILayout.Space(8);
             DrawTypeSpecificModePickers(propertyKindProp, interpolationProp, discreteValueSelectionProp);
+        }
+
+        private static void DrawPropertyField(
+            SerializedProperty bindablePropertyProp,
+            SerializedProperty propertyKindProp,
+            SerializedProperty startValueProp,
+            SerializedProperty endValueProp)
+        {
+            bool hadPreviousProperty = TryGetBindableProperty(bindablePropertyProp, out var previousProperty);
+            EditorGUILayout.PropertyField(bindablePropertyProp, new GUIContent("Property"), includeChildren: true);
+
+            if (bindablePropertyProp.hasMultipleDifferentValues || propertyKindProp == null || propertyKindProp.hasMultipleDifferentValues)
+                return;
+
+            if (!TryGetBindableProperty(bindablePropertyProp, out var currentProperty))
+                return;
+
+            bool propertyChanged = !hadPreviousProperty || !currentProperty.Equals(previousProperty);
+            if (!propertyChanged)
+                return;
+
+            var kind = (ValueKind)propertyKindProp.enumValueIndex;
+            if (kind == ValueKind.Invalid)
+                return;
+
+            var seedValue = ResolveSeedValue(bindablePropertyProp, kind);
+
+            startValueProp.boxedValue = seedValue;
+            endValueProp.boxedValue = seedValue;
+        }
+
+        private static ValueContainer ResolveSeedValue(SerializedProperty bindablePropertyProp, ValueKind expectedKind)
+        {
+            if (TryGetBindableProperty(bindablePropertyProp, out var bindableProperty) &&
+                TryReadCurrentValue(bindableProperty, out var currentValue) &&
+                currentValue.Kind == expectedKind)
+            {
+                return currentValue;
+            }
+
+            return ValueContainer.FromDefault(expectedKind);
+        }
+
+        private static bool TryReadCurrentValue(BindableProperty bindableProperty, out ValueContainer value)
+        {
+            value = default;
+
+            if (bindableProperty.Target == null || string.IsNullOrEmpty(bindableProperty.Path))
+                return false;
+
+            var root = GetTargetGameObject(bindableProperty.Target);
+            if (root == null)
+                return false;
+
+            try
+            {
+                using var collection = PropertyBindingCollection.Bind(root, new[] { bindableProperty });
+                return collection.TryRead(bindableProperty, out value);
+            }
+            catch
+            {
+                value = default;
+                return false;
+            }
+        }
+
+        private static GameObject GetTargetGameObject(UnityEngine.Object target)
+        {
+            return target switch
+            {
+                GameObject go => go,
+                Component component => component.gameObject,
+                _ => null
+            };
         }
 
         private static void DrawTypeSpecificModePickers(SerializedProperty propertyKindProp, SerializedProperty interpolationProp, SerializedProperty discreteValueSelectionProp)

@@ -109,4 +109,9 @@ namespace TimboJimbo.Sequencer
         public virtual void OnExit(in PlaybackBoundaryContext context) { }
         public virtual void CleanUp(in PlaybackSetupContext context) { }
     }
+
+    public class NoOpPlayback : SegmentPlayback
+    {
+        public NoOpPlayback(in PlaybackBuildContext context) : base(context) { }
+    }
 }

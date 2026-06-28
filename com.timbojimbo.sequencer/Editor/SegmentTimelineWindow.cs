@@ -356,6 +356,7 @@ namespace TimboJimboEditor.Sequencer
             bool providerSame = ReferenceEquals(Provider, provider);
             string resolvedSequenceName = TimelineSessionState.ResolveValidSequenceName(provider, sequenceName ?? SequenceName);
             bool sequenceSame = string.Equals(SequenceName, resolvedSequenceName, StringComparison.Ordinal);
+            bool contextChanged = !providerSame || !sequenceSame;
 
             if (!forceReinitialize && providerSame && sequenceSame && Provider != null)
                 return;
@@ -374,6 +375,9 @@ namespace TimboJimboEditor.Sequencer
 
             _rangeState.Initialize(GetPlaybackDurationLimit());
             RefreshSequenceControls();
+
+            if (contextChanged)
+                _canvas?.RequestReframeOnNextSetView();
             
             RefreshPlan();
             UpdatePreviewVisuals();
@@ -524,6 +528,18 @@ namespace TimboJimboEditor.Sequencer
         private void OnDeleteRequested(IReadOnlyList<SegmentSelectionModel> selectedModels)
         {
             _sessionState.DeleteSegments(selectedModels);
+
+            bool hasRemainingSegmentSelection = Selection.objects
+                .OfType<SegmentSelectionModel>()
+                .Any(model => model != null
+                              && ReferenceEquals(model.Handle.Provider, Provider)
+                              && string.Equals(model.Handle.SequenceName, SequenceName, StringComparison.Ordinal));
+
+            if (!hasRemainingSegmentSelection && Provider != null)
+            {
+                Selection.activeGameObject = Provider.gameObject;
+                SyncCanvasSelection();
+            }
         }
 
         private void OnAddRequested(Type type, float time)

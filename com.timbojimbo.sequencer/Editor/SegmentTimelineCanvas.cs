@@ -30,7 +30,7 @@ namespace TimboJimboEditor.Sequencer
         private static readonly Color PreviewAccent = new Color(0.173f, 0.471f, 0.922f, 1.000f);
 
         private enum DragKind { None, ResizeLeft, ResizeRight, Move }
-        private enum PointerSessionMode { BackgroundPress, BlockPress, SelectionPress, Marquee, Transform, TransformSkew, Scrub, Pan, PlaybackRangeStartDrag, PlaybackRangeEndDrag, PlaybackRangeMoveDrag }
+        private enum PointerSessionMode { BackgroundPress, BlockPress, SelectionPress, Marquee, Transform, TransformSmear, Scrub, Pan, PlaybackRangeStartDrag, PlaybackRangeEndDrag, PlaybackRangeMoveDrag }
 
         public Action<IReadOnlyList<SegmentSelectionModel>> SelectionChanged;
         public Action<IReadOnlyList<(SegmentSelectionModel model, float start, float duration)>> TimeAdjustmentCommitted;
@@ -82,7 +82,7 @@ namespace TimboJimboEditor.Sequencer
         private PointerSession _pointerSession;
         private bool IsDraggingSelection =>
             _selectionTransform != null &&
-            (_pointerSession?.Mode == PointerSessionMode.Transform || _pointerSession?.Mode == PointerSessionMode.TransformSkew);
+            (_pointerSession?.Mode == PointerSessionMode.Transform || _pointerSession?.Mode == PointerSessionMode.TransformSmear);
 
         private readonly struct SegmentSnapCandidate
         {
@@ -474,14 +474,15 @@ namespace TimboJimboEditor.Sequencer
             public readonly Vector2 PointerStart;
             public readonly float InitialSelectionStart;
             public readonly float InitialSelectionDuration;
+            public readonly float InitialPivotTime;
 
             private readonly List<Entry> _entries;
             private readonly Dictionary<SegmentSelectionModel, GhostTiming> _ghostByModel;
             private bool _hasChanges;
-            private bool _canSkew;
+            private bool _canSmear;
 
             public bool HasChanges => _hasChanges;
-            public bool CanSkew => _canSkew;
+            public bool CanSmear => _canSmear;
 
             public SelectionTransformOperation(
                 DragKind kind,
@@ -489,6 +490,7 @@ namespace TimboJimboEditor.Sequencer
                 Vector2 pointerStart,
                 float selectionStart,
                 float selectionDuration,
+                float pivotTime,
                 IReadOnlyList<SegmentSelectionModel> selectedModels)
             {
                 Kind = kind;
@@ -496,11 +498,12 @@ namespace TimboJimboEditor.Sequencer
                 PointerStart = pointerStart;
                 InitialSelectionStart = selectionStart;
                 InitialSelectionDuration = Mathf.Max(selectionDuration, 0.0001f);
+                InitialPivotTime = pivotTime;
 
                 _entries = new List<Entry>();
                 _ghostByModel = new Dictionary<SegmentSelectionModel, GhostTiming>();
                 _hasChanges = false;
-                _canSkew = false;
+                _canSmear = false;
 
                 if (selectedModels == null)
                     return;
@@ -516,7 +519,7 @@ namespace TimboJimboEditor.Sequencer
                     _ghostByModel[model] = new GhostTiming(entry.Start, entry.Duration);
                 }
 
-                _canSkew = _entries.Count > 1;
+                _canSmear = _entries.Count > 0;
             }
 
             public void UpdateLinear(float dt)
@@ -596,29 +599,35 @@ namespace TimboJimboEditor.Sequencer
                 }
             }
 
-            public void UpdateSkew(float dt)
+            public void UpdateSmear(float dt)
             {
                 if (_entries.Count == 0)
                     return;
 
-                if (!_canSkew)
+                if (!_canSmear)
                 {
                     UpdateLinear(dt);
                     return;
                 }
 
-                UpdateGhostSkew(dt);
+                UpdateGhostSmearFromPivot(dt);
             }
 
-            private void UpdateGhostSkew(float dt)
+            private void UpdateGhostSmearFromPivot(float dt)
             {
                 float initialStart = InitialSelectionStart;
                 float initialDuration = Mathf.Max(InitialSelectionDuration, 0.0001f);
                 float initialEnd = initialStart + initialDuration;
 
+                float pivot = Mathf.Clamp(InitialPivotTime, initialStart + 0.0001f, initialEnd - 0.0001f);
+
+                float pivotU = Mathf.Clamp01((pivot - initialStart) / initialDuration);
+                pivotU = Mathf.Clamp(pivotU, 0.001f, 0.999f);
+
                 float normalizedDelta = dt / initialDuration;
-                float k = Mathf.Exp(-normalizedDelta * 4f);
-                k = Mathf.Clamp(k, 0.02f, 50f);
+                float maxPositive = 1f - pivotU;
+                float maxNegative = -pivotU;
+                float pivotShiftU = Mathf.Clamp(normalizedDelta * 0.75f, maxNegative + 0.0001f, maxPositive - 0.0001f);
 
                 _hasChanges = false;
 
@@ -627,8 +636,8 @@ namespace TimboJimboEditor.Sequencer
                     var entry = _entries[i];
                     float entryEnd = entry.Start + entry.Duration;
 
-                    float mappedStart = MapSkewedTime(entry.Start, initialStart, initialDuration, initialEnd, k);
-                    float mappedEnd = MapSkewedTime(entryEnd, initialStart, initialDuration, initialEnd, k);
+                    float mappedStart = MapSmearedTime(entry.Start, initialStart, initialDuration, pivotU, pivotShiftU);
+                    float mappedEnd = MapSmearedTime(entryEnd, initialStart, initialDuration, pivotU, pivotShiftU);
 
                     float newStart = entry.Start;
                     float newDuration = entry.Duration;
@@ -656,23 +665,29 @@ namespace TimboJimboEditor.Sequencer
                 }
             }
 
-            private static float MapSkewedTime(float time, float start, float duration, float end, float k)
+            private static float MapSmearedTime(float time, float start, float duration, float pivotU, float pivotShiftU)
             {
                 if (duration <= 0.0001f)
                     return time;
 
                 float u = Mathf.Clamp01((time - start) / duration);
-                if (u <= 0f)
-                    return start;
-                if (u >= 1f)
-                    return end;
 
-                float denom = u + (1f - u) * k;
-                if (denom <= 0.000001f)
-                    return start;
+                float mappedU;
+                if (u <= pivotU)
+                {
+                    float denom = Mathf.Max(pivotU, 0.000001f);
+                    float t = u / denom;
+                    mappedU = u + pivotShiftU * t;
+                }
+                else
+                {
+                    float denom = Mathf.Max(1f - pivotU, 0.000001f);
+                    float t = (1f - u) / denom;
+                    mappedU = u + pivotShiftU * t;
+                }
 
-                float skewed = u / denom;
-                return Mathf.Lerp(start, end, skewed);
+                mappedU = Mathf.Clamp01(mappedU);
+                return start + mappedU * duration;
             }
 
             public bool TryGetGhost(SegmentSelectionModel model, out float start, out float duration)
@@ -950,6 +965,11 @@ namespace TimboJimboEditor.Sequencer
             _selection.SetCommittedSelection(selectedModels);
             RebuildSnapTimes();
             RefreshSelectionVisuals();
+        }
+
+        public void RequestReframeOnNextSetView()
+        {
+            _viewWasEverFramed = false;
         }
 
         public void SetTime(float time)
@@ -1245,18 +1265,50 @@ namespace TimboJimboEditor.Sequencer
 
         private void FrameAllInternal()
         {
+            if (_models.Count == 0)
+                return;
+
+            float maxEnd = 1f;
+            for (int i = 0; i < _models.Count; i++)
+                maxEnd = Mathf.Max(maxEnd, _models[i].EndTime);
+                
+            FrameRange(0f, maxEnd);
+        }
+
+        private void FrameSelection()
+        {
+            float start = float.MaxValue;
+            float end = float.MinValue;
+
+            var selection = _selection.EffectiveSelection;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                start = Mathf.Min(start, selection[i].StartTime);
+                end = Mathf.Max(end, selection[i].EndTime);
+            }
+
+            FrameRange(start, end);
+        }
+
+        private void FrameRange(float start, float end)
+        {
             float width = resolvedStyle.width;
             if (float.IsNaN(width) || width < 10f)
                 return;
 
-            _viewWasEverFramed = true;
-            float maxEnd = 1f;
-            for (int i = 0; i < _models.Count; i++)
-                maxEnd = Mathf.Max(maxEnd, _models[i].EndTime);
+            if (_models.Count == 0)
+                return;
 
-            float padding = maxEnd * 0.05f;
-            float viewStart = -padding;
-            float viewEnd = maxEnd + padding;
+            if (start == float.MaxValue || end == float.MinValue)
+                return;
+
+            _viewWasEverFramed = true;
+            
+            var duration = end - start;
+
+            float padding = duration * 0.05f;
+            float viewStart = start - padding;
+            float viewEnd = end + padding;
 
             float contentWidth = Mathf.Max(width - HorizontalPadding * 2f, 10f);
             _pixelsPerSecond = Mathf.Clamp(contentWidth / Mathf.Max(viewEnd - viewStart, 0.5f), MinZoom, MaxZoom);
@@ -1268,17 +1320,21 @@ namespace TimboJimboEditor.Sequencer
             if (!TryGetSelectionTransformStart(worldPosition, out DragKind kind, out float selectionStartTime, out float selectionDurationTime))
                 return false;
 
+            var local = this.WorldToLocal(worldPosition);
+            float pivotTime = XToTime(local.x);
+
             _selectionTransform = new SelectionTransformOperation(
                 kind,
                 pointerId,
                 worldPosition,
                 selectionStartTime,
                 selectionDurationTime,
+                pivotTime,
                 _selection.EffectiveSelection);
             return true;
         }
 
-        private bool TryBeginSelectionTransformSession(Vector2 worldPosition, int pointerId, bool startInSkewMode)
+        private bool TryBeginSelectionTransformSession(Vector2 worldPosition, int pointerId, bool startInSmearMode)
         {
             if (_pointerSession == null)
                 return false;
@@ -1286,9 +1342,9 @@ namespace TimboJimboEditor.Sequencer
             if (!BeginSelectionTransformFromPointer(worldPosition, pointerId))
                 return false;
 
-            bool useSkew = startInSkewMode && _selectionTransform != null && _selectionTransform.CanSkew;
-            _pointerSession.Mode = useSkew
-                ? PointerSessionMode.TransformSkew
+            bool useSmear = startInSmearMode && _selectionTransform != null && _selectionTransform.CanSmear;
+            _pointerSession.Mode = useSmear
+                ? PointerSessionMode.TransformSmear
                 : PointerSessionMode.Transform;
 
             RebuildSnapTimes();
@@ -1924,12 +1980,6 @@ namespace TimboJimboEditor.Sequencer
                     return;
                 }
 
-                if (evt.altKey && TryBeginPlaybackRangeMoveSession(local, evt, requireHitInsideRange: false))
-                {
-                    evt.StopPropagation();
-                    return;
-                }
-
                 if (TryGetSelectionTransformStart(evt.position, out _, out _, out _))
                 {
                     BeginPointerSession(new PointerSession
@@ -1939,6 +1989,12 @@ namespace TimboJimboEditor.Sequencer
                         PointerStartWorld = evt.position,
                         PointerStartLocal = local,
                     });
+                    evt.StopPropagation();
+                    return;
+                }
+
+                if (evt.altKey && TryBeginPlaybackRangeMoveSession(local, evt, requireHitInsideRange: false))
+                {
                     evt.StopPropagation();
                     return;
                 }
@@ -2099,15 +2155,15 @@ namespace TimboJimboEditor.Sequencer
                     return;
 
                 case PointerSessionMode.Transform:
-                case PointerSessionMode.TransformSkew:
+                case PointerSessionMode.TransformSmear:
                 {
                     float dx = evt.position.x - _selectionTransform.PointerStart.x;
                     float dt = dx / Mathf.Max(_pixelsPerSecond, 0.0001f);
 
-                    bool useSkew = _pointerSession.Mode == PointerSessionMode.TransformSkew;
+                    bool useSmear = _pointerSession.Mode == PointerSessionMode.TransformSmear;
 
                     bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
-                    if (!useSkew && shouldSnap && TryGetSnapAdjustedDelta(_selectionTransform.Kind, dt, out var snappedDt, out _))
+                    if (!useSmear && shouldSnap && TryGetSnapAdjustedDelta(_selectionTransform.Kind, dt, out var snappedDt, out _))
                     {
                         dt = snappedDt;
                     }
@@ -2116,8 +2172,8 @@ namespace TimboJimboEditor.Sequencer
                         HideSnapGuide();
                     }
 
-                    if (useSkew)
-                        _selectionTransform.UpdateSkew(dt);
+                    if (useSmear)
+                        _selectionTransform.UpdateSmear(dt);
                     else
                         _selectionTransform.UpdateLinear(dt);
 
@@ -2214,7 +2270,7 @@ namespace TimboJimboEditor.Sequencer
                 }
 
                 case PointerSessionMode.Transform:
-                case PointerSessionMode.TransformSkew:
+                case PointerSessionMode.TransformSmear:
                 {
                     if (_selectionTransform.HasChanges)
                     {
@@ -2268,7 +2324,8 @@ namespace TimboJimboEditor.Sequencer
 
             if (evt.keyCode == KeyCode.F)
             {
-                if (_selection.EffectiveSelection.Count > 0)
+                bool hasSelection = _selection.EffectiveSelection.Count > 0;
+                if (hasSelection && !IsAllDisplayedModelsSelected())
                     FrameSelection();
                 else
                     FrameAllInternal();
@@ -2278,35 +2335,23 @@ namespace TimboJimboEditor.Sequencer
             }
         }
 
-        private void FrameSelection()
+        private bool IsAllDisplayedModelsSelected()
         {
-            float width = resolvedStyle.width;
-            if (float.IsNaN(width) || width < 10f || _selection.EffectiveSelection.Count == 0)
-                return;
+            if (_models.Count == 0)
+                return false;
 
-            float start = float.MaxValue;
-            float end = float.MinValue;
+            if (_selection.EffectiveSelection.Count != _models.Count)
+                return false;
 
-            var selection = _selection.EffectiveSelection;
-            for (int i = 0; i < selection.Count; i++)
+            for (int i = 0; i < _models.Count; i++)
             {
-                start = Mathf.Min(start, selection[i].StartTime);
-                end = Mathf.Max(end, selection[i].EndTime);
+                if (!_selection.IsSelected(_models[i]))
+                    return false;
             }
 
-            if (start == float.MaxValue || end == float.MinValue)
-                return;
-
-            float duration = end - start;
-
-            float padding = Mathf.Max(duration * 0.5f, 0.5f);
-            float viewStart = Mathf.Max(0f, start - padding);
-            float viewEnd = end + padding;
-
-            float contentWidth = Mathf.Max(width - HorizontalPadding * 2f, 10f);
-            _pixelsPerSecond = Mathf.Clamp(contentWidth / Mathf.Max(viewEnd - viewStart, 0.5f), MinZoom, MaxZoom);
-            _viewStart = viewStart;
+            return true;
         }
+
 
         private void BuildContextMenu(ContextualMenuPopulateEvent evt)
         {

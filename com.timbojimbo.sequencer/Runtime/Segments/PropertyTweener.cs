@@ -24,7 +24,6 @@ namespace TimboJimbo.Sequencer.Segments
     }
 
     [Serializable]
-    [AddSegmentMenu("")]
     public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigurable, IPlaybackBuilder
     {
         public float StartTime;
@@ -45,17 +44,28 @@ namespace TimboJimbo.Sequencer.Segments
 
         public override SegmentPlan GetPlan([CanBeNull] SegmentPlan parent)
         {
-            var blueprint = new SegmentPlan(this, parent)
+            if (!Property.IsValid)
+            {
+                return new SegmentPlan(this, parent)
+                {
+                    Timing = { RelativeStartTime = StartTime, RelativeDuration = Duration }
+                };
+            }
+
+            var plan = new SegmentPlan(this, parent)
             {
                 Bindings = { Properties = new HashSet<BindableProperty> { Property } },
                 Timing = { RelativeStartTime = StartTime, RelativeDuration = Duration }
             };
 
-            return blueprint;
+            return plan;
         }
 
         public SegmentPlayback BuildPlayback(in PlaybackBuildContext context)
         {
+            if (!Property.IsValid)
+                return new NoOpPlayback(context);
+
             return new Playback(context)
             {
                 BindingCollection = context.PropertyBindings,

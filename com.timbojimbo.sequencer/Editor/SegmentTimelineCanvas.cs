@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using UnityEditor;
+using TimboJimbo.Sequencer;
 using TimboJimboEditor.Sequencer.Blocks;
+using TimboJimboEditor.Sequencer.DragDrop;
 using UnityEngine;
 using UnityEngine.Pool;
 using UnityEngine.UIElements;
@@ -39,6 +42,7 @@ namespace TimboJimboEditor.Sequencer
         public Action<IReadOnlyList<(SegmentSelectionModel model, float start, float duration)>> TimeAdjustmentCommitted;
         public Action<IReadOnlyList<SegmentSelectionModel>> DeleteRequested;
         public Action<Type, float> AddRequested;
+        public Action<Segment> DropSegmentRequested;
         public Action<float> SeekRequested;
         public Action<float, float> PlaybackRangeChanged;
         public Action PlaybackRangeResetRequested;
@@ -69,6 +73,7 @@ namespace TimboJimboEditor.Sequencer
         private readonly VisualElement _snapGuide;
         private readonly VisualElement _selectionOutline;
         private readonly VisualElement _marqueeBox;
+        private readonly VisualElement _dragDropDraftPreview;
 
         private float _time;
         private bool _previewActive;
@@ -81,6 +86,12 @@ namespace TimboJimboEditor.Sequencer
         private bool _showPlaybackRangeGhost;
         private float _playbackRangeGhostStart;
         private float _playbackRangeGhostEnd;
+        private Segment _dragDropDraftSegment;
+        private float _dragDropDraftStart;
+        private float _dragDropDraftDuration;
+        private int _dragDropDraftLane;
+        private SequenceProvider _dropTargetProvider;
+        private string _dropTargetSequenceName;
 
         private SelectionTransformOperation _selectionTransform;
         private PointerSession _pointerSession;
@@ -937,6 +948,22 @@ namespace TimboJimboEditor.Sequencer
             };
             Add(_marqueeBox);
 
+            _dragDropDraftPreview = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    display = DisplayStyle.None,
+                    left = 0f,
+                    top = 0f,
+                    width = 0f,
+                    height = LaneHeight,
+                    opacity = 0.9f,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_dragDropDraftPreview);
+
             generateVisualContent += DrawRuler;
             RegisterCallback<GeometryChangedEvent>(_ =>
             {
@@ -948,6 +975,10 @@ namespace TimboJimboEditor.Sequencer
             RegisterCallback<PointerDownEvent>(OnPointerDown);
             RegisterCallback<PointerMoveEvent>(OnPointerMove);
             RegisterCallback<PointerUpEvent>(OnPointerUp);
+            RegisterCallback<DragUpdatedEvent>(OnDragUpdated);
+            RegisterCallback<DragPerformEvent>(OnDragPerform);
+            RegisterCallback<DragLeaveEvent>(_ => ClearDropDraftPreview());
+            RegisterCallback<DragExitedEvent>(_ => ClearDropDraftPreview());
             RegisterCallback<KeyDownEvent>(OnKeyDown);
             this.AddManipulator(new ContextualMenuManipulator(BuildContextMenu));
         }
@@ -980,6 +1011,12 @@ namespace TimboJimboEditor.Sequencer
             _selection.SetCommittedSelection(selectedModels);
             RebuildSnapTimes();
             RefreshSelectionVisuals();
+        }
+
+        public void SetDropTargetContext(SequenceProvider provider, string sequenceName)
+        {
+            _dropTargetProvider = provider;
+            _dropTargetSequenceName = sequenceName;
         }
 
         public void RequestReframeOnNextSetView()
@@ -1633,6 +1670,7 @@ namespace TimboJimboEditor.Sequencer
 
             LayoutBlocksInLanes();
             LayoutZeroDurationMarkers();
+            LayoutDropDraftPreview();
             PositionPlayhead();
             PositionPlaybackRangeVisuals();
             UpdateSelectionOutline();
@@ -1727,6 +1765,8 @@ namespace TimboJimboEditor.Sequencer
 
         private void LayoutBlocksInLanes()
         {
+            _dragDropDraftLane = 0;
+
             // Pre-compute display timings (including ghosts) for packing
             var displayTimings = new Dictionary<PlanBlock, (float start, float duration)>();
             for (int i = 0; i < _blocks.Count; i++)
@@ -1735,19 +1775,31 @@ namespace TimboJimboEditor.Sequencer
                 displayTimings[_blocks[i]] = (start, duration);
             }
 
+            var packEntries = new List<(PlanBlock block, Segment segment, float start, float end, bool isDraft)>();
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                var block = _blocks[i];
+                var (start, duration) = displayTimings[block];
+                packEntries.Add((block, block.Model.Segment, start, start + duration, false));
+            }
+
+            if (_dragDropDraftSegment != null)
+            {
+                packEntries.Add((_blocks.Count > 0 ? null : null, _dragDropDraftSegment, _dragDropDraftStart, _dragDropDraftStart + _dragDropDraftDuration, true));
+            }
+
             var packed = LanePacker.Pack(
-                items: _blocks,
-                itemToInput: block =>
+                items: packEntries,
+                itemToInput: entry =>
                 {
-                    var editor = SegmentBlockEditorRegistry.GetEditor(block.Model.Segment);
-                    var (displayStart, displayDuration) = displayTimings[block];
+                    var editor = SegmentBlockEditorRegistry.GetEditor(entry.segment);
 
                     return new ()
                     {
-                        Data = block,
-                        Start = displayStart,
-                        End = displayStart + displayDuration,
-                        Group = editor.GetLanePackerGroup(block.Model.Segment),
+                        Data = entry,
+                        Start = entry.start,
+                        End = entry.end,
+                        Group = editor.GetLanePackerGroup(entry.segment),
                     };
                 },
                 depenetrateAndCompact: true
@@ -1756,7 +1808,17 @@ namespace TimboJimboEditor.Sequencer
             for (int i = 0; i < packed.Count; i++)
             {
                 var item = packed[i];
-                var block = item.Item;
+                var entry = item.Item;
+                if (entry.isDraft)
+                {
+                    _dragDropDraftLane = item.Lane;
+                    continue;
+                }
+
+                var block = entry.block;
+                if (block == null)
+                    continue;
+
                 var (start, duration) = displayTimings[block];
 
                 var top = LaneTop + item.Lane * (LaneHeight + LaneGap);
@@ -2585,6 +2647,195 @@ namespace TimboJimboEditor.Sequencer
                 RefreshLayout();
                 evt.StopPropagation();
             }
+        }
+
+        private void OnDragUpdated(DragUpdatedEvent evt)
+        {
+            var local = this.WorldToLocal(evt.mousePosition);
+            bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+            float time = SnapPlaybackTime(XToTime(local.x), shouldSnap);
+
+            if (TryResolveDropDraft(time, out var draftSegment))
+            {
+                UpdateDropDraftPreview(draftSegment, time);
+                DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+                evt.StopPropagation();
+                return;
+            }
+
+            ClearDropDraftPreview();
+            DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
+        }
+
+        private void OnDragPerform(DragPerformEvent evt)
+        {
+            var local = this.WorldToLocal(evt.mousePosition);
+            bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+            float time = SnapPlaybackTime(XToTime(local.x), shouldSnap);
+
+            if (!TryResolveDropDraft(time, out var draftSegment))
+            {
+                ClearDropDraftPreview();
+                DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
+                return;
+            }
+
+            UpdateDropDraftPreview(draftSegment, time);
+
+            DragAndDrop.AcceptDrag();
+            DropSegmentRequested?.Invoke(CloneSegment(_dragDropDraftSegment));
+            ClearDropDraftPreview();
+            evt.StopPropagation();
+        }
+
+        private bool TryResolveDropDraft(float time, out Segment resolvedSegment)
+        {
+            resolvedSegment = null;
+
+            if (!TryResolveDraggedGameObjects(DragAndDrop.objectReferences, out var draggedGameObjects))
+                return false;
+
+            var context = new TimelineDragDropResolveContext(
+                _dropTargetProvider,
+                _dropTargetSequenceName,
+                draggedGameObjects,
+                Mathf.Max(0f, time));
+
+            if (!TimelineDragDropResolverRegistry.TryResolve(context, out var result) || result.Segment == null)
+                return false;
+
+            resolvedSegment = result.Segment;
+            return true;
+        }
+
+        private static bool TryResolveDraggedGameObjects(IReadOnlyList<UnityEngine.Object> draggedObjects, out List<GameObject> draggedGameObjects)
+        {
+            draggedGameObjects = null;
+
+            if (draggedObjects == null || draggedObjects.Count == 0)
+                return false;
+
+            draggedGameObjects = new List<GameObject>(draggedObjects.Count);
+            for (int i = 0; i < draggedObjects.Count; i++)
+            {
+                var draggedObject = draggedObjects[i];
+                switch (draggedObject)
+                {
+                    case GameObject go:
+                        draggedGameObjects.Add(go);
+                        break;
+                    case Component component:
+                        draggedGameObjects.Add(component.gameObject);
+                        break;
+                    default:
+                        draggedGameObjects = null;
+                        return false;
+                }
+            }
+
+            return draggedGameObjects.Count > 0;
+        }
+
+        private void UpdateDropDraftPreview(Segment segment, float startTime)
+        {
+            if (_dragDropDraftPreview == null || segment == null)
+                return;
+
+            _dragDropDraftSegment = segment;
+            _dragDropDraftStart = Mathf.Max(0f, startTime);
+            if (_dragDropDraftSegment is IStartTimeConfigurable startConfig)
+                startConfig.SetStartTime(_dragDropDraftStart);
+
+            var plan = _dragDropDraftSegment.GetPlan(null);
+            _dragDropDraftDuration = plan != null
+                ? Mathf.Max(0f, plan.Timing.AbsoluteDuration)
+                : 0f;
+
+            var previewEditor = SegmentBlockEditorRegistry.GetEditor(_dragDropDraftSegment);
+            var (fill, border) = previewEditor.GetBlockColors(_dragDropDraftSegment);
+            fill.a *= 0.65f;
+            border.a *= 0.85f;
+
+            _dragDropDraftPreview.Clear();
+            _dragDropDraftPreview.style.display = DisplayStyle.Flex;
+            _dragDropDraftPreview.style.backgroundColor = fill;
+            _dragDropDraftPreview.style.borderTopColor = border;
+            _dragDropDraftPreview.style.borderBottomColor = border;
+            _dragDropDraftPreview.style.borderLeftColor = border;
+            _dragDropDraftPreview.style.borderRightColor = border;
+            _dragDropDraftPreview.style.borderTopWidth = 1f;
+            _dragDropDraftPreview.style.borderBottomWidth = 1f;
+            _dragDropDraftPreview.style.borderLeftWidth = 1f;
+            _dragDropDraftPreview.style.borderRightWidth = 1f;
+            _dragDropDraftPreview.style.borderTopLeftRadius = 4f;
+            _dragDropDraftPreview.style.borderTopRightRadius = 4f;
+            _dragDropDraftPreview.style.borderBottomLeftRadius = 4f;
+            _dragDropDraftPreview.style.borderBottomRightRadius = 4f;
+
+            previewEditor.OnBlockGUI(_dragDropDraftSegment, _dragDropDraftPreview);
+
+            var addBadge = new Label("+")
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    right = 4f,
+                    top = 4f,
+                    width = 14f,
+                    height = 14f,
+                    borderTopLeftRadius = 7f,
+                    borderTopRightRadius = 7f,
+                    borderBottomLeftRadius = 7f,
+                    borderBottomRightRadius = 7f,
+                    unityTextAlign = TextAnchor.MiddleCenter,
+                    backgroundColor = new Color(0f, 0f, 0f, 0.4f),
+                    color = new Color(1f, 1f, 1f, 0.95f),
+                    unityFontStyleAndWeight = FontStyle.Bold,
+                    fontSize = 10,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            _dragDropDraftPreview.Add(addBadge);
+
+            RefreshLayout();
+        }
+
+        private void LayoutDropDraftPreview()
+        {
+            if (_dragDropDraftPreview == null || _dragDropDraftSegment == null)
+                return;
+
+            float left = TimeToX(_dragDropDraftStart);
+            float width = Mathf.Max(TimeToX(_dragDropDraftStart + _dragDropDraftDuration) - left, MinDurationPx);
+            float top = LaneTop + _dragDropDraftLane * (LaneHeight + LaneGap);
+
+            _dragDropDraftPreview.style.left = left;
+            _dragDropDraftPreview.style.top = top;
+            _dragDropDraftPreview.style.width = width;
+            _dragDropDraftPreview.style.height = LaneHeight;
+        }
+
+        private void ClearDropDraftPreview()
+        {
+            bool hadDraft = _dragDropDraftSegment != null;
+            _dragDropDraftSegment = null;
+            _dragDropDraftStart = 0f;
+            _dragDropDraftDuration = 0f;
+            _dragDropDraftLane = 0;
+
+            if (_dragDropDraftPreview != null)
+                _dragDropDraftPreview.style.display = DisplayStyle.None;
+
+            if (hadDraft)
+                RefreshLayout();
+        }
+
+        private static Segment CloneSegment(Segment source)
+        {
+            if (source == null)
+                return null;
+
+            return JsonUtility.FromJson(JsonUtility.ToJson(source), source.GetType()) as Segment;
         }
 
         private bool IsAllDisplayedModelsSelected()

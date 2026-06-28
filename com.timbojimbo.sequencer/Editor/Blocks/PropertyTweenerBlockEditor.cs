@@ -29,11 +29,18 @@ namespace TimboJimboEditor.Sequencer.Blocks
                 pickingMode = PickingMode.Ignore,
             };
 
-            if (tweener.Property.IsValid)
+            var tweenerTargetGo = default(GameObject);
+            if (tweener.Property.Target is Component c)
             {
-                var obj = tweener.Property.Target;
+                tweenerTargetGo = c.gameObject;
+            }
+            else if (tweener.Property.Target is GameObject go)
+            {
+                tweenerTargetGo = go;
+            }
 
-                var compName = ObjectNames.NicifyVariableName(obj.GetType().Name);
+            if (tweenerTargetGo != null)
+            {
                 var textColumn = new VisualElement
                 {
                     style =
@@ -47,7 +54,7 @@ namespace TimboJimboEditor.Sequencer.Blocks
                     pickingMode = PickingMode.Ignore,
                 };
 
-                textColumn.Add(new Label($"{(obj is Component c ? c.gameObject.name : obj.name)}")
+                textColumn.Add(new Label(tweenerTargetGo.name)
                 {
                     style =
                     {
@@ -71,25 +78,37 @@ namespace TimboJimboEditor.Sequencer.Blocks
                     pickingMode = PickingMode.Ignore,
                 };
 
-                var iconContent = EditorGUIUtility.ObjectContent(obj, obj.GetType());
-                if (iconContent.image != null)
+                var propName = NicifiedPropertyNameFromPath(tweener.Property.Path);
+                string detailsText;
                 {
-                    detailRow.Add(new Image
+                    if(string.IsNullOrWhiteSpace(propName))
                     {
-                        image = iconContent.image,
-                        style =
+                        detailsText = "Select Property...";
+                    }
+                    else
+                    {
+                        var typeName = tweener.Property.Target.GetType().Name;
+                        detailsText = $"{typeName} > {propName}";
+
+                        var iconContent = EditorGUIUtility.ObjectContent(tweener.Property.Target, tweener.Property.Target.GetType());
+                        if (iconContent.image != null)
                         {
-                            width = 14,
-                            height = 14,
-                            marginRight = 3,
-                            flexShrink = 0,
-                        },
-                        pickingMode = PickingMode.Ignore,
-                    });
+                            detailRow.Add(new Image
+                            {
+                                image = iconContent.image,
+                                style =
+                                {
+                                    width = 14,
+                                    height = 14,
+                                    marginRight = 3,
+                                    flexShrink = 0,
+                                },
+                                pickingMode = PickingMode.Ignore,
+                            });
+                        }
+                    }
                 }
 
-                var propName = NicifiedPropertyNameFromPath(tweener.Property.Path);
-                var detailsText = string.IsNullOrEmpty(propName) ? $"{compName} > (no property)" : $"{compName} > {propName}";
                 detailRow.Add(new Label(detailsText)
                 {
                     style =

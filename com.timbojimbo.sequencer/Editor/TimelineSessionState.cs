@@ -361,6 +361,24 @@ namespace TimboJimboEditor.Sequencer
             Refresh();
         }
 
+        public void AddSegment(Segment segment)
+        {
+            if (Provider == null || ActiveSequence == null || segment == null)
+                return;
+
+            var cloned = CloneSegment(segment);
+            if (cloned == null)
+                return;
+
+            Undo.RecordObject(Provider, $"Add {cloned.GetType().Name}");
+            ActiveSequence.Segments.Add(cloned);
+
+            EditorUtility.SetDirty(Provider);
+            PrefabUtility.RecordPrefabInstancePropertyModifications(Provider);
+
+            Refresh();
+        }
+
         public void DeleteSegments(IReadOnlyList<SegmentSelectionModel> segmentModels)
         {
             if (Provider == null || ActiveSequence == null || segmentModels == null || segmentModels.Count == 0)

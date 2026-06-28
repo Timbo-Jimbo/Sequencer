@@ -253,6 +253,7 @@ namespace TimboJimboEditor.Sequencer
             _canvas.TimeAdjustmentCommitted += OnTimeAdjustmentCommitted;
             _canvas.DeleteRequested += OnDeleteRequested;
             _canvas.AddRequested += OnAddRequested;
+            _canvas.DropSegmentRequested += OnDropSegmentRequested;
             _canvas.SeekRequested += OnSeekRequested;
             _canvas.PlaybackRangeChanged += OnCanvasPlaybackRangeChanged;
             _canvas.PlaybackRangeResetRequested += OnCanvasPlaybackRangeResetRequested;
@@ -261,6 +262,7 @@ namespace TimboJimboEditor.Sequencer
             _canvas.StackSelectionRequested += StackSelectedSegmentsEndToEnd;
             _canvas.AlignSelectionStartsRequested += AlignSelectedSegmentsByStart;
             _canvas.AlignSelectionEndsRequested += AlignSelectedSegmentsByEnd;
+            _canvas.SetDropTargetContext(Provider, SequenceName);
             rootVisualElement.Add(_canvas);
 
             _emptyStateContainer = new VisualElement
@@ -375,6 +377,7 @@ namespace TimboJimboEditor.Sequencer
 
             _rangeState.Initialize(GetPlaybackDurationLimit());
             RefreshSequenceControls();
+            _canvas?.SetDropTargetContext(Provider, SequenceName);
 
             if (contextChanged)
                 _canvas?.RequestReframeOnNextSetView();
@@ -545,6 +548,11 @@ namespace TimboJimboEditor.Sequencer
         private void OnAddRequested(Type type, float time)
         {
             _sessionState.AddSegment(type, time);
+        }
+
+        private void OnDropSegmentRequested(Segment segment)
+        {
+            _sessionState.AddSegment(segment);
         }
 
         private void OnCopyRequested()

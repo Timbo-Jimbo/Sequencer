@@ -4,39 +4,30 @@ using System.Text.RegularExpressions;
 using JetBrains.Annotations;
 using TimboJimbo.Sequencer.Builder;
 using UnityEngine;
+using UnityEngine.Pool;
 
 
 namespace TimboJimbo.Sequencer.Segments
 {
     [Serializable]
+    public struct SequenceSearchParams
+    {
+        public Transform SearchRoot;
+        public bool LimitDepth;
+        public int Depth;
+        public bool ExcludeInactiveInHierarchy;
+        public bool ExcludeInactiveSelf;
+        public bool FilterByProviderName;
+        public string ProviderNameRegex;
+        public bool FilterBySequenceName;
+        public string SequenceNameRegex;
+
+        public bool Valid => SearchRoot != null;
+    }
+
+    [Serializable]
     public class FindAndInsertSequenceProviders : Segment, IStartTimeConfigurable
     {
-        [Serializable]
-        public struct SearchParams
-        {
-            public Transform SearchRoot;
-            public SearchScope Scope;
-            public Filters Filter;
-
-            /// <summary>Optional name filter (regex). Empty = match all.</summary>
-            public string NameRegex;
-        }
-
-        public enum SearchScope
-        {
-            RootOnly,
-            DirectChildrenOnly,
-            EntireHierarchy,
-        }
-
-        [Flags]
-        public enum Filters
-        {
-            None = 0,
-            ExcludeInactiveInHierarchy = 1 << 0,
-            ExcludeInactiveSelf = 1 << 1,
-        }
-
         public enum ChildSort
         {
             ByDiscoveryOrder,
@@ -44,8 +35,8 @@ namespace TimboJimbo.Sequencer.Segments
             ByYPosition
         }
 
-        public List<SearchParams> InclusionSearches = new List<SearchParams>();
-        public List<SearchParams> ExclusionSearches = new List<SearchParams>();
+        public List<SequenceSearchParams> InclusionSearches = new List<SequenceSearchParams>();
+        public List<SequenceSearchParams> ExclusionSearches = new List<SequenceSearchParams>();
 
         public float StaggerDelay;
         public ChildSort Sorting;
@@ -77,26 +68,25 @@ namespace TimboJimbo.Sequencer.Segments
                     Timing = { RelativeStartTime = StartTime }
                 };
 
-                var includedProviders = new List<SequenceProvider>();
+                var includedProviders = new List<(SequenceProvider sequenceProvider, string sequenceName)>();
                 foreach (var search in InclusionSearches)
                     Collect(search, includedProviders);
 
 
-                var excludedProviders = new List<SequenceProvider>();
+                var excludedProviders = new List<(SequenceProvider sequenceProvider, string sequenceName)>();
                 foreach (var search in ExclusionSearches)
                     Collect(search, excludedProviders);
 
                 for (int i = includedProviders.Count - 1; i >= 0; i--)
                 {
                     var excluded = excludedProviders.Contains(includedProviders[i]);
-                    if (excluded)
-                        includedProviders.RemoveAt(i);
+                    if (excluded) includedProviders.RemoveAt(i);
                 }
 
                 for (int i = 0; i < includedProviders.Count; i++)
                 {
                     var provider = includedProviders[i];
-                    var childPlan = provider.GetPlan(plan);
+                    var childPlan = provider.sequenceProvider.GetPlan(provider.sequenceName, plan);
                     childPlan.Timing.RelativeStartTime += i * Mathf.Max(StaggerDelay, 0f);
                     var endsAt = childPlan.Timing.RelativeEndTime;
 
@@ -114,17 +104,17 @@ namespace TimboJimbo.Sequencer.Segments
 
         }
 
-        private void Collect(in SearchParams search, List<SequenceProvider> results)
+        private void Collect(in SequenceSearchParams search, List<(SequenceProvider sequenceProvider, string sequenceName)> results)
         {
-            if (search.SearchRoot == null)
+            if (!search.Valid)
                 return;
 
-            Regex regex = null;
-            if (!string.IsNullOrEmpty(search.NameRegex))
+            Regex providerNameRegex = null;
+            if (search.FilterByProviderName && !string.IsNullOrEmpty(search.ProviderNameRegex))
             {
                 try
                 {
-                    regex = new Regex(search.NameRegex);
+                    providerNameRegex = new Regex(search.ProviderNameRegex);
                 }
                 catch
                 {
@@ -132,65 +122,68 @@ namespace TimboJimbo.Sequencer.Segments
                 }
             }
 
-            if (search.Scope == SearchScope.RootOnly)
+            Regex sequenceNameRegex = null;
+            if (search.FilterBySequenceName && !string.IsNullOrEmpty(search.SequenceNameRegex))
             {
-                if ((search.Filter & Filters.ExcludeInactiveInHierarchy) != 0 && !search.SearchRoot.gameObject.activeInHierarchy)
-                    return;
-                if ((search.Filter & Filters.ExcludeInactiveSelf) != 0 && !search.SearchRoot.gameObject.activeSelf)
-                    return;
-                if (regex != null && !regex.IsMatch(search.SearchRoot.name))
-                    return;
-                if (
-                    search.SearchRoot.TryGetComponent<SequenceProvider>(out var provider) 
-                    && provider.Sequence != null 
-                    && !results.Contains(provider)
-                )
+                try
                 {
-                    results.Add(provider);
+                    sequenceNameRegex = new Regex(search.SequenceNameRegex);
+                }
+                catch
+                {
+                    return;
                 }
             }
-            else if (search.Scope == SearchScope.DirectChildrenOnly)
-            {
-                foreach (Transform child in search.SearchRoot)
-                {
-                    if ((search.Filter & Filters.ExcludeInactiveInHierarchy) != 0 && !child.gameObject.activeInHierarchy)
-                        continue;
-                    if ((search.Filter & Filters.ExcludeInactiveSelf) != 0 && !child.gameObject.activeSelf)
-                        continue;
-                    if (regex != null && !regex.IsMatch(child.name))
-                        continue;
-                    if (child.TryGetComponent<SequenceProvider>(out var provider)
-                        && provider.Sequence != null && !results.Contains(provider))
-                        results.Add(provider);
-                }
-            }
-            else
-            {
-                var providers = search.SearchRoot.GetComponentsInChildren<SequenceProvider>(
-                    includeInactive: (search.Filter & Filters.ExcludeInactiveInHierarchy) == 0
-                );
 
-                foreach (var provider in providers)
+            using(ListPool<(Transform target, int depth)>.Get(out var openList))
+            {
+                openList.Add((search.SearchRoot, 0));
+
+                while (openList.Count > 0)
                 {
-                    if ((search.Filter & Filters.ExcludeInactiveSelf) != 0 && !provider.gameObject.activeSelf)
+                    var (current, currentDepth) = openList[openList.Count - 1];
+                    openList.RemoveAt(openList.Count - 1);
+
+                    if (current == null)
                         continue;
-                    
-                    if (regex != null && !regex.IsMatch(provider.name))
+
+                    if ((search.ExcludeInactiveInHierarchy && !current.gameObject.activeInHierarchy) || (search.ExcludeInactiveSelf && !current.gameObject.activeSelf))
                         continue;
-                    if (provider.Sequence != null && !results.Contains(provider))
-                        results.Add(provider);
+
+                    if (providerNameRegex != null && !providerNameRegex.IsMatch(current.name))
+                        continue;
+
+                    if (current.TryGetComponent<SequenceProvider>(out var provider))
+                    {
+                        foreach(var sequence in provider.Sequences)
+                        {
+                            if (sequenceNameRegex != null && !sequenceNameRegex.IsMatch(sequence.Name))
+                                continue;
+
+                            results.Add((provider, sequence.Name));
+                        }
+                    }
+
+                    if (!search.LimitDepth || currentDepth < search.Depth)
+                    {
+                        foreach (Transform child in current)
+                        {
+                            openList.Add((child, currentDepth + 1));
+                        }
+                    }
                 }
             }
+            
 
             if(results.Count > 1)
             {
                 switch (Sorting)
                 {
                     case ChildSort.ByXPosition:
-                        results.Sort((a, b) => a.transform.position.x.CompareTo(b.transform.position.x));
+                        results.Sort((a, b) => a.sequenceProvider.transform.position.x.CompareTo(b.sequenceProvider.transform.position.x));
                         break;
                     case ChildSort.ByYPosition:
-                        results.Sort((a, b) => a.transform.position.y.CompareTo(b.transform.position.y));
+                        results.Sort((a, b) => a.sequenceProvider.transform.position.y.CompareTo(b.sequenceProvider.transform.position.y));
                         break;
                 }
             }
@@ -199,10 +192,11 @@ namespace TimboJimbo.Sequencer.Segments
 
     public static class FindAndInsertSequenceProvidersExtensions
     {
-        public static Segment FindAndPlayDirectChildren(
+        public static Segment FindAndPlay(
             this SegMake _,
-            Transform search,
+            SequenceSearchParams searchFor,
             float staggerBy = 0f,
+            SequenceSearchParams exclude = default,
             FindAndInsertSequenceProviders.ChildSort sort = FindAndInsertSequenceProviders.ChildSort.ByDiscoveryOrder
         )
         {
@@ -212,12 +206,12 @@ namespace TimboJimbo.Sequencer.Segments
                 Sorting = sort,
                 InclusionSearches =
                 {
-                    new FindAndInsertSequenceProviders.SearchParams
-                    {
-                        SearchRoot = search,
-                        Scope = FindAndInsertSequenceProviders.SearchScope.DirectChildrenOnly,
-                    }
-                }
+                    searchFor
+                },
+                ExclusionSearches =
+                {
+                    exclude
+                },
             };
         }
     }

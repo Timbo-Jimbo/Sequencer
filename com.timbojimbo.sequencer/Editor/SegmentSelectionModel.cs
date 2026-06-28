@@ -56,9 +56,9 @@ namespace TimboJimboEditor.Sequencer
         public bool CanAdjustStartTime => Segment is IStartTimeConfigurable;
         public bool CanAdjustDuration => Segment is IDurationConfigurable;
 
-        public void Bind(SequenceProvider sourceProvider, Segment segment, int index)
+        public void Bind(SequenceProvider sourceProvider, string sequenceName, Segment segment, int index)
         {
-            Handle = new SegmentHandle(sourceProvider, index);
+            Handle = new SegmentHandle(sourceProvider, sequenceName, index);
             Segment = JsonUtility.FromJson(JsonUtility.ToJson(segment), segment.GetType()) as Segment;
             ResolveTimingFromPlan();
             RefreshDisplayName();
@@ -86,7 +86,7 @@ namespace TimboJimboEditor.Sequencer
             }
 
             var nicifiedType = ObjectNames.NicifyVariableName(Segment.GetType().Name);
-            name = $"{nicifiedType} (Index {Handle.Index})";
+            name = $"{nicifiedType} ({Handle.SequenceName} · Index {Handle.Index})";
         }
     }
 }

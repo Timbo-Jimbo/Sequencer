@@ -8,6 +8,7 @@ namespace TimboJimboEditor.Sequencer
     public sealed class SegmentPreviewSession : IDisposable
     {
         public SequenceProvider Provider { get; }
+        public string SequenceName { get; }
         public SequenceInstance Instance { get; private set; }
         public float Time { get; private set; }
         public float Duration => Instance != null ? Instance.Duration : 0f;
@@ -17,18 +18,22 @@ namespace TimboJimboEditor.Sequencer
         public event Action Rebuilt;
         public event Action Disposed;
 
-        private SegmentPreviewSession(SequenceProvider provider)
+        private SegmentPreviewSession(SequenceProvider provider, string sequenceName)
         {
             Provider = provider;
+            SequenceName = sequenceName;
             PlaybackRange = new PlaybackRange(0f, 1f, true);
         }
 
-        public static SegmentPreviewSession Acquire(SequenceProvider provider)
+        public static SegmentPreviewSession Acquire(SequenceProvider provider, string sequenceName)
         {
             if (provider == null)
                 throw new ArgumentNullException(nameof(provider));
 
-            var session = new SegmentPreviewSession(provider);
+            if (string.IsNullOrWhiteSpace(sequenceName))
+                throw new ArgumentException("Sequence name is required.", nameof(sequenceName));
+
+            var session = new SegmentPreviewSession(provider, sequenceName);
             session.Rebuild();
             return session;
         }
@@ -43,7 +48,7 @@ namespace TimboJimboEditor.Sequencer
             if (Provider == null)
                 return;
 
-            Instance = Provider.CreateInstance(PlaybackRange, isPreview: true);
+            Instance = Provider.CreateInstance(SequenceName, PlaybackRange, isPreview: true);
             Time = Mathf.Clamp(preservedTime, 0f, Duration);
             Instance.Scrub(Time);
             Rebuilt?.Invoke();

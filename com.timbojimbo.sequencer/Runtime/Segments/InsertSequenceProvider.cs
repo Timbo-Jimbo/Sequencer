@@ -10,6 +10,7 @@ namespace TimboJimbo.Sequencer.Segments
     {
         public float StartTime;
         public SequenceProvider Provider;
+        public string SequenceName;
 
         public void SetStartTime(float startTime) => StartTime = startTime;
         public float GetStartTime() => StartTime;
@@ -31,10 +32,8 @@ namespace TimboJimbo.Sequencer.Segments
             {
                 _isBuildingPlan = true;
 
-                if(Provider != null)
+                if(Provider != null && Provider.TryGetPlan(SequenceName, out var plan, parent))
                 {
-                    var plan = Provider.GetPlan(parent);
-                    
                     // we are effectively hijacking it!
                     plan.Segment = this;
                     plan.Timing.RelativeStartTime = StartTime;

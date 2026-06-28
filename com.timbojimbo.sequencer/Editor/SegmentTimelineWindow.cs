@@ -9,6 +9,7 @@ using TimboJimbo.PropertyBindings;
 using TimboJimboEditor.PropertyBindings.Utility;
 using UnityEditor.SceneManagement;
 using TimboJimbo.Sequencer;
+using TimboJimbo.Sequencer.Segments;
 using TimboJimboEditor.Sequencer.Recorders;
 
 namespace TimboJimboEditor.Sequencer
@@ -27,10 +28,12 @@ namespace TimboJimboEditor.Sequencer
 
         private TimelineSessionState _sessionState;
         private Label _providerLabel;
+        private PopupField<string> _sequencePopup;
         private SegmentTimelineCanvas _canvas;
         private ToolbarToggle _playToggle;
         private Label _previewIndicator;
         private VisualElement _canvasBorderOverlay;
+        private VisualElement _emptyStateContainer;
 
         private SerializedObject _serializedProvider;
         private bool _isSyncingSelection;
@@ -61,6 +64,8 @@ namespace TimboJimboEditor.Sequencer
         private bool IsPreviewing => _previewSession != null;
         private bool IsRecording => _editTracker != null;
         public SequenceProvider Provider => _sessionState?.Provider;
+        public string SequenceName => _sessionState?.SequenceName;
+        private Sequence ActiveSequence => _sessionState?.ActiveSequence;
 
         private float DisplayTime => _rangeState.Playhead;
         private float ActivePlaybackRangeStart => _rangeState.RangeStart;
@@ -75,9 +80,14 @@ namespace TimboJimboEditor.Sequencer
 
         public static void Open(SequenceProvider provider)
         {
+            Open(provider, null);
+        }
+
+        public static void Open(SequenceProvider provider, string sequenceName)
+        {
             var window = GetWindow<SegmentTimelineWindow>("Segment Timeline");
             if (provider != null)
-                window.SetProvider(provider);
+                window.SetProvider(provider, sequenceName, forceReinitialize: true);
         }
 
         internal static void NotifyProviderChanged(SequenceProvider provider)
@@ -166,6 +176,18 @@ namespace TimboJimboEditor.Sequencer
             };
             toolbar.Add(_providerLabel);
 
+            toolbar.Add(new Label("Sequence") { style = { marginRight = 4f, unityTextAlign = TextAnchor.MiddleLeft } });
+            _sequencePopup = new PopupField<string>(new List<string> { "(none)" }, 0)
+            {
+                style = { minWidth = 140f, marginRight = 4f }
+            };
+            _sequencePopup.RegisterValueChangedCallback(evt =>
+            {
+                if (!string.Equals(evt.newValue, SequenceName, StringComparison.Ordinal))
+                    SetProvider(Provider, evt.newValue, forceReinitialize: true);
+            });
+            toolbar.Add(_sequencePopup);
+
             _playToggle = new ToolbarToggle { text = "Play" };
             _playToggle.RegisterValueChangedCallback(evt => SetPlaying(evt.newValue));
             toolbar.Add(_playToggle);
@@ -241,6 +263,37 @@ namespace TimboJimboEditor.Sequencer
             _canvas.AlignSelectionEndsRequested += AlignSelectedSegmentsByEnd;
             rootVisualElement.Add(_canvas);
 
+            _emptyStateContainer = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    left = 16f,
+                    right = 16f,
+                    top = 56f,
+                    display = DisplayStyle.None,
+                    paddingLeft = 12f,
+                    paddingRight = 12f,
+                    paddingTop = 10f,
+                    paddingBottom = 10f,
+                    backgroundColor = new Color(0.18f, 0.18f, 0.18f, 0.95f),
+                    borderTopWidth = 1f,
+                    borderBottomWidth = 1f,
+                    borderLeftWidth = 1f,
+                    borderRightWidth = 1f,
+                    borderTopColor = new Color(0.35f, 0.35f, 0.35f),
+                    borderBottomColor = new Color(0.35f, 0.35f, 0.35f),
+                    borderLeftColor = new Color(0.35f, 0.35f, 0.35f),
+                    borderRightColor = new Color(0.35f, 0.35f, 0.35f),
+                }
+            };
+            _emptyStateContainer.Add(new Label("No sequences found on this provider. Manage sequences in the provider inspector.")
+            {
+                style = { marginBottom = 8f, whiteSpace = WhiteSpace.Normal }
+            });
+            _emptyStateContainer.Add(new Button(FocusProviderInspector) { text = "Manage Sequences in Provider Inspector" });
+            rootVisualElement.Add(_emptyStateContainer);
+
             _canvasBorderOverlay = new VisualElement
             {
                 style =
@@ -253,6 +306,7 @@ namespace TimboJimboEditor.Sequencer
                 pickingMode = PickingMode.Ignore,
             };
             _canvas.Add(_canvasBorderOverlay);
+            RefreshSequenceControls();
             UpdatePreviewVisuals();
         }
 
@@ -268,15 +322,23 @@ namespace TimboJimboEditor.Sequencer
             }
 
             var selectedModels = Selection.objects.OfType<SegmentSelectionModel>().ToList();
-            var modelProvider = selectedModels.FirstOrDefault(m => m != null && m.Handle.Provider != null)?.Handle.Provider;
+            var selectedModel = selectedModels.FirstOrDefault(m => m != null && m.Handle.Provider != null);
+            var modelProvider = selectedModel?.Handle.Provider;
+            var modelSequenceName = selectedModel?.Handle.SequenceName;
 
             var selectedGo = Selection.activeGameObject;
             var selectedGoProvider = selectedGo != null ? selectedGo.GetComponentInParent<SequenceProvider>() : null;
 
             var provider = selectedGoProvider ?? modelProvider;
+            var targetSequenceName = selectedGoProvider != null ? SequenceName : modelSequenceName;
 
-            if (Provider == null || (provider != null && !ReferenceEquals(Provider, provider)))
-                SetProvider(provider);
+            if (selectedGoProvider != null)
+                targetSequenceName = TimelineSessionState.ResolveValidSequenceName(selectedGoProvider, targetSequenceName);
+
+            bool providerChanged = !ReferenceEquals(Provider, provider);
+            bool sequenceChanged = provider != null && !string.Equals(SequenceName, targetSequenceName, StringComparison.Ordinal);
+            if (Provider == null || providerChanged || sequenceChanged)
+                SetProvider(provider, targetSequenceName, forceReinitialize: true);
 
             SyncCanvasSelection();
         }
@@ -286,18 +348,22 @@ namespace TimboJimboEditor.Sequencer
             if (Provider == null)
                 return;
 
-            _sessionState.Refresh();
+            SetProvider(Provider, SequenceName, forceReinitialize: true);
         }
 
-        private void SetProvider(SequenceProvider provider)
+        private void SetProvider(SequenceProvider provider, string sequenceName = null, bool forceReinitialize = false)
         {
-            if (ReferenceEquals(Provider, provider) && Provider != null)
+            bool providerSame = ReferenceEquals(Provider, provider);
+            string resolvedSequenceName = TimelineSessionState.ResolveValidSequenceName(provider, sequenceName ?? SequenceName);
+            bool sequenceSame = string.Equals(SequenceName, resolvedSequenceName, StringComparison.Ordinal);
+
+            if (!forceReinitialize && providerSame && sequenceSame && Provider != null)
                 return;
 
             StopRecording(commit: false);
             DisposePreviewSession();
 
-            _sessionState.Bind(provider);
+            _sessionState.Bind(provider, resolvedSequenceName);
             _providerLabel.text = Provider != null ? $"{Provider.gameObject.name}" : "No Selected Provider";
 
             _serializedProvider?.Dispose();
@@ -307,18 +373,62 @@ namespace TimboJimboEditor.Sequencer
             _playToggle?.SetValueWithoutNotify(false);
 
             _rangeState.Initialize(GetPlaybackDurationLimit());
+            RefreshSequenceControls();
             
             RefreshPlan();
             UpdatePreviewVisuals();
         }
 
-        public void RefreshPlan()
+        private void RefreshSequenceControls()
+        {
+            var names = Provider?.Sequences?
+                .Where(sequence => sequence != null)
+                .Select(sequence => sequence.Name)
+                .ToList() ?? new List<string>();
+
+            if (_sequencePopup != null)
+            {
+                if (names.Count == 0)
+                    _sequencePopup.choices = new List<string> { "(none)" };
+                else
+                    _sequencePopup.choices = names;
+
+                if (names.Count > 0)
+                {
+                    var selected = names.Contains(SequenceName) ? SequenceName : names[0];
+                    _sequencePopup.SetValueWithoutNotify(selected);
+                }
+                else
+                {
+                    _sequencePopup.SetValueWithoutNotify("(none)");
+                }
+
+                _sequencePopup.SetEnabled(Provider != null && names.Count > 0);
+            }
+
+            if (_emptyStateContainer != null)
+                _emptyStateContainer.style.display = Provider != null && (Provider.Sequences == null || Provider.Sequences.Count == 0)
+                    ? DisplayStyle.Flex
+                    : DisplayStyle.None;
+        }
+
+        private void FocusProviderInspector()
         {
             if (Provider == null)
+                return;
+
+            Selection.activeGameObject = Provider.gameObject;
+            EditorGUIUtility.PingObject(Provider.gameObject);
+        }
+
+        public void RefreshPlan()
+        {
+            if (Provider == null || ActiveSequence == null)
             {
                 _canvas.SetView(null, null);
                 _canvas.SetPreviewActive(false);
                 _canvas.SetTime(DisplayTime);
+                RefreshSequenceControls();
                 UpdatePreviewVisuals();
                 return;
             }
@@ -328,17 +438,19 @@ namespace TimboJimboEditor.Sequencer
 
         private void OnSessionRefreshed()
         {
-            if (Provider == null)
+            if (Provider == null || ActiveSequence == null)
             {
                 _canvas.SetView(null, null);
                 _canvas.SetPreviewActive(false);
                 _canvas.SetTime(DisplayTime);
+                RefreshSequenceControls();
                 return;
             }
 
             // Keep selection perfectly in sync
             var currentSelectedModels = Selection.objects.OfType<SegmentSelectionModel>()
-                .Where(m => ReferenceEquals(m.Handle.Provider, Provider))
+                .Where(m => ReferenceEquals(m.Handle.Provider, Provider)
+                            && string.Equals(m.Handle.SequenceName, SequenceName, StringComparison.Ordinal))
                 .ToList();
 
             _canvas.SetView(_sessionState.Models, currentSelectedModels);
@@ -358,6 +470,7 @@ namespace TimboJimboEditor.Sequencer
             _canvas.SetPreviewActive(IsPreviewing);
             _canvas.SetTime(DisplayTime);
             PushPlaybackRangeToCanvas();
+            RefreshSequenceControls();
             UpdatePreviewVisuals();
         }
 
@@ -367,7 +480,8 @@ namespace TimboJimboEditor.Sequencer
                 return;
 
             var activeSelected = Selection.objects.OfType<SegmentSelectionModel>()
-                .Where(m => ReferenceEquals(m.Handle.Provider, Provider))
+                .Where(m => ReferenceEquals(m.Handle.Provider, Provider)
+                            && string.Equals(m.Handle.SequenceName, SequenceName, StringComparison.Ordinal))
                 .ToList();
 
             _canvas.SetSelection(activeSelected);
@@ -381,7 +495,19 @@ namespace TimboJimboEditor.Sequencer
             _isSyncingSelection = true;
             try
             {
-                Selection.objects = selected.Cast<UnityEngine.Object>().ToArray();
+                if (selected != null && selected.Count > 0)
+                {
+                    Selection.objects = selected.Cast<UnityEngine.Object>().ToArray();
+                }
+                else if (Provider != null)
+                {
+                    Selection.activeGameObject = Provider.gameObject;
+                }
+                else
+                {
+                    Selection.objects = Array.Empty<UnityEngine.Object>();
+                }
+
                 SyncCanvasSelection();
             }
             finally
@@ -478,16 +604,18 @@ namespace TimboJimboEditor.Sequencer
 
             return Selection.objects
                 .OfType<SegmentSelectionModel>()
-                .Where(m => m != null && ReferenceEquals(m.Handle.Provider, Provider))
+                .Where(m => m != null
+                            && ReferenceEquals(m.Handle.Provider, Provider)
+                            && string.Equals(m.Handle.SequenceName, SequenceName, StringComparison.Ordinal))
                 .ToList();
         }
 
         private void EnsurePreviewSession()
         {
-            if (Provider == null || IsPreviewing)
+            if (Provider == null || string.IsNullOrWhiteSpace(SequenceName) || IsPreviewing)
                 return;
 
-            _previewSession = SegmentPreviewSession.Acquire(Provider);
+            _previewSession = SegmentPreviewSession.Acquire(Provider, SequenceName);
             _previewSession.Rebuilt += OnSessionRebuilt;
             _previewSession.Disposed += OnSessionDisposed;
             EnsurePlaybackRange();
@@ -708,7 +836,7 @@ namespace TimboJimboEditor.Sequencer
             if (_canvas == null)
                 return;
 
-            bool visible = Provider != null;
+            bool visible = Provider != null && ActiveSequence != null;
             _canvas.SetPlaybackRange(_rangeState.RangeStart, _rangeState.RangeEnd, visible);
         }
 
@@ -755,18 +883,22 @@ namespace TimboJimboEditor.Sequencer
 
             if (IsRecording) return;
 
-            if (Provider == null || !IsPreviewing)
+            if (Provider == null || ActiveSequence == null || !IsPreviewing)
             {
                 _recordToggle?.SetValueWithoutNotify(false);
                 return;
             }
 
             _recordableProperties = new List<BindableProperty>();
-            BindablePropertyUtility.GetBindableProperties(Provider.Sequence.BindingRoot, _recordableProperties, recursive: true);
+            //todo: we should force Provider to be the binding root, because otherwise the 
+            //recording scope is unbounded and we need to ie capture the whole hierarchy (which, actually, isn't sufficient since 
+            // the current setup technically allows you to animate properties on different hierarchies..except the editor tooling wouldnt support it 
+            // properly..!) It is an editor tooling restriction.
+            BindablePropertyUtility.GetBindableProperties(Provider.transform.root.gameObject, _recordableProperties, recursive: true);
 
             _recordSnapshotValues.Clear();
             _recordCollection?.Dispose();
-            _recordCollection = PropertyBindingCollection.Bind(Provider.Sequence.BindingRoot, _recordableProperties);
+            _recordCollection = PropertyBindingCollection.Bind(Provider.transform.root.gameObject, _recordableProperties);
             for (int i = 0; i < _recordableProperties.Count; i++)
             {
                 var property = _recordableProperties[i];
@@ -825,9 +957,9 @@ namespace TimboJimboEditor.Sequencer
                         _recordedEdits.Remove(edit.BindableProperty);
                         if (removed.Created)
                         {
-                            if (removed.Segment is IStartTimeConfigurable)
+                            if (removed.Segment is IStartTimeConfigurable && ActiveSequence != null)
                             {
-                                Provider.Sequence.Segments.Remove(removed.Segment);
+                                ActiveSequence.Segments.Remove(removed.Segment);
                             }
                         }
                         else
@@ -920,7 +1052,7 @@ namespace TimboJimboEditor.Sequencer
             if (newSegment == null) return;
 
             Undo.RecordObject(Provider, "Record Segment Edit");
-            Provider.Sequence.Segments.Add(newSegment);
+            ActiveSequence?.Segments.Add(newSegment);
 
             _recordedEdits[edit.BindableProperty] = new RecordedEdit { Segment = newSegment, Created = true };
             _sessionState.Refresh();

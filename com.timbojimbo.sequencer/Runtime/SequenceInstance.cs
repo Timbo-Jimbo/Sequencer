@@ -4,12 +4,14 @@ using System.Linq;
 using TimboJimbo.PropertyBindings;
 using TimboJimbo.Sequencer.Segments;
 using UnityEngine;
+using UnityEngine.Pool;
 
 namespace TimboJimbo.Sequencer
 {
     public class SequenceInstance : IDisposable
     {
         private readonly Dictionary<GameObject, PropertyBindingCollection> _propertyBindingCollections = new();
+        private readonly Dictionary<SegmentPlan, GameObject> _planToBindingRoot = new();
         private readonly Dictionary<PropertyBindingCollection, Dictionary<BindableProperty, ValueContainer>> _restoreValues = new();
         private readonly List<SegmentPlayback> _playbacks = new();
         private readonly bool _restoreValuesOnDispose;
@@ -182,7 +184,7 @@ namespace TimboJimbo.Sequencer
 
         private void CollectBindingsAndRestoreValues(SegmentPlan rootPlan)
         {
-            var bindingRootToProperties = new Dictionary<GameObject, HashSet<BindableProperty>>();
+            var bindingRootToProperties = new Dictionary<Transform, HashSet<BindableProperty>>();
             var openList = new Queue<SegmentPlan>();
             openList.Enqueue(rootPlan);
 
@@ -190,17 +192,113 @@ namespace TimboJimbo.Sequencer
             {
                 var current = openList.Dequeue();
 
-                if (current.Bindings.BindingsRoot != null)
+                if (current.Bindings.Properties.Count > 0)
                 {
-                    if (!bindingRootToProperties.ContainsKey(current.Bindings.BindingsRoot))
+                    var resolvedBindingRoot = default(Transform);
+                    using(ListPool<Transform>.Get(out var potentialBindingRoots))
                     {
-                        bindingRootToProperties[current.Bindings.BindingsRoot] = new HashSet<BindableProperty>();
+                        foreach(var property in current.Bindings.Properties)
+                        {
+                            var propertyTransform = property.Target is Component component
+                                ? component.transform :
+                                property.Target is GameObject go 
+                                ? go.transform : null;
+
+                            if (propertyTransform == null)
+                            {
+                                Debug.LogWarning($"BindableProperty {property} has a non-GameObject related target. This property will be ignored.");
+                                continue;
+                            }
+
+                            var potentialBindingRoot = propertyTransform.parent != null ? propertyTransform.parent : propertyTransform;
+                            potentialBindingRoots.Add(potentialBindingRoot);
+                        }
+
+                        //nearest ancestor to all
+                        var commonAncestor = default(Transform);
+                        for (int i = 0; i < potentialBindingRoots.Count; i++)
+                        {
+                            Transform root = potentialBindingRoots[i];
+
+                            if (commonAncestor == null)
+                            {
+                                commonAncestor = root;
+                            }
+                            else
+                            {
+                                while (root != null && !root.IsChildOf(commonAncestor))
+                                {
+                                    root = root.parent;
+                                }
+
+                                if (root != null)
+                                {
+                                    commonAncestor = root;
+                                }
+                                else
+                                {
+                                    Debug.LogWarning($"Could not find a common binding root for segment {current.Segment}. Some of this segments properties will not get bound correctly.");
+                                }
+                            }
+                        }
+                        
+                        resolvedBindingRoot = commonAncestor;   
+
+                        foreach(var (root, _) in bindingRootToProperties)
+                        {
+                            if (commonAncestor.IsChildOf(root))
+                            {
+                                resolvedBindingRoot = root;
+                                break;
+                            }
+                        }
                     }
 
-                    foreach (var property in current.Bindings.Properties)
+
+                    // New/Unique binding root, so we need to create a new PropertyBindingCollection for it
+                    if (!bindingRootToProperties.TryGetValue(resolvedBindingRoot, out var existingEntry))
                     {
-                        bindingRootToProperties[current.Bindings.BindingsRoot].Add(property);
+                        bindingRootToProperties[resolvedBindingRoot] = current.Bindings.Properties.ToHashSet();
+
+                        //go through the list again, and see if there are any binding roots that we can 'absorb' into this new binding root
+                        using(ListPool<Transform>.Get(out var rootsToAbsorb))
+                        {
+                            foreach(var (root, _) in bindingRootToProperties)
+                            {
+                                if (root == resolvedBindingRoot)
+                                    continue;
+
+                                if (root.transform.IsChildOf(resolvedBindingRoot))
+                                    rootsToAbsorb.Add(root);
+                            }
+
+                            foreach(var root in rootsToAbsorb)
+                            {
+                                var propertiesToAbsorb = bindingRootToProperties[root];
+                                bindingRootToProperties.Remove(root);
+                                bindingRootToProperties[resolvedBindingRoot].UnionWith(propertiesToAbsorb);
+                            }
+
+                            //redirect _planToBindingRoot for all the absorbed roots to the new resolvedBindingRoot
+                            foreach(var plan in _planToBindingRoot.Keys.ToList())
+                            {
+                                if (_planToBindingRoot[plan] != null && rootsToAbsorb.Contains(_planToBindingRoot[plan].transform))
+                                {
+                                    _planToBindingRoot[plan] = resolvedBindingRoot.gameObject;
+                                }
+                            }
+                        }
                     }
+                    else
+                    {
+                        existingEntry.UnionWith(current.Bindings.Properties);
+                    }
+
+                    _planToBindingRoot[current] = resolvedBindingRoot.gameObject;
+                }
+                else
+                {
+                    _planToBindingRoot[current] = null;
                 }
 
                 foreach (var child in current.Children)
@@ -211,8 +309,8 @@ namespace TimboJimbo.Sequencer
 
             foreach (var kvp in bindingRootToProperties)
             {
-                var propertyBindingCollection = PropertyBindingCollection.Bind(kvp.Key, kvp.Value.ToList());
-                _propertyBindingCollections[kvp.Key] = propertyBindingCollection;
+                var propertyBindingCollection = PropertyBindingCollection.Bind(kvp.Key.gameObject, kvp.Value.ToList());
+                _propertyBindingCollections[kvp.Key.gameObject] = propertyBindingCollection;
 
                 var restoreValuesForCollection = new Dictionary<BindableProperty, ValueContainer>();
                 foreach (var property in kvp.Value)
@@ -241,9 +339,7 @@ namespace TimboJimbo.Sequencer
                 if (playbackBuilder != null)
                 {
                     var playbackBuildContext = new PlaybackBuildContext(
-                        propertyBindings: current.Bindings.BindingsRoot != null
-                            ? _propertyBindingCollections[current.Bindings.BindingsRoot]
-                            : null,
+                        propertyBindings: _planToBindingRoot[current] != null ? _propertyBindingCollections[_planToBindingRoot[current]] : null,
                         absoluteStartTime: current.Timing.AbsoluteStartTime,
                         absoluteDuration: current.Timing.AbsoluteDuration
                     );

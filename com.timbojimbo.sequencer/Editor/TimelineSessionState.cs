@@ -4,53 +4,131 @@ using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using TimboJimbo.Sequencer;
+using TimboJimbo.Sequencer.Segments;
 
 namespace TimboJimboEditor.Sequencer
 {
     public sealed class TimelineSessionState : IDisposable
     {
         public SequenceProvider Provider { get; private set; }
+        public string SequenceName { get; private set; }
+        public Sequence ActiveSequence => TryResolveSequence(Provider, SequenceName, out var sequence, out _) ? sequence : null;
         public List<SegmentSelectionModel> Models { get; } = new();
 
         public event Action SessionRefreshed;
 
-        public void Bind(SequenceProvider provider)
+        public void Bind(SequenceProvider provider, string sequenceName = null)
         {
             Provider = provider;
+            SequenceName = ResolveValidSequenceName(provider, sequenceName);
             Refresh();
+        }
+
+        public void SetSequenceName(string sequenceName)
+        {
+            SequenceName = ResolveValidSequenceName(Provider, sequenceName);
+            Refresh();
+        }
+
+        public static bool TryResolveSequence(SequenceProvider provider, string sequenceName, out Sequence sequence, out int sequenceIndex)
+        {
+            sequence = null;
+            sequenceIndex = -1;
+
+            if (provider == null || provider.Sequences == null || provider.Sequences.Count == 0)
+                return false;
+
+            for (int i = 0; i < provider.Sequences.Count; i++)
+            {
+                var candidate = provider.Sequences[i];
+                if (candidate == null)
+                    continue;
+
+                if (string.Equals(candidate.Name, sequenceName, StringComparison.Ordinal))
+                {
+                    sequence = candidate;
+                    sequenceIndex = i;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static string ResolveValidSequenceName(SequenceProvider provider, string preferredName)
+        {
+            if (provider == null || provider.Sequences == null || provider.Sequences.Count == 0)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(preferredName) && TryResolveSequence(provider, preferredName, out _, out _))
+                return preferredName;
+
+            for (int i = 0; i < provider.Sequences.Count; i++)
+            {
+                if (provider.Sequences[i] != null)
+                    return provider.Sequences[i].Name;
+            }
+
+            return null;
+        }
+
+        public static string MakeUniqueSequenceName(IReadOnlyList<Sequence> sequences, string seed)
+        {
+            string baseName = string.IsNullOrWhiteSpace(seed) ? "Sequence" : seed.Trim();
+            var taken = new HashSet<string>(StringComparer.Ordinal);
+
+            if (sequences != null)
+            {
+                for (int i = 0; i < sequences.Count; i++)
+                {
+                    if (sequences[i] == null)
+                        continue;
+
+                    taken.Add(sequences[i].Name ?? string.Empty);
+                }
+            }
+
+            if (!taken.Contains(baseName))
+                return baseName;
+
+            int suffix = 2;
+            while (taken.Contains($"{baseName} {suffix}"))
+                suffix++;
+
+            return $"{baseName} {suffix}";
         }
 
         public void Refresh()
         {
-            if (Provider == null || Provider.Sequence == null)
+            if (!TryResolveSequence(Provider, SequenceName, out var activeSequence, out _))
             {
                 ClearModels();
                 SessionRefreshed?.Invoke();
                 return;
             }
 
-            var activeLayer = Provider.Sequence.Segments;
-            
-            // Build dictionary of unique resurrected/existing selection models by index
+            var activeLayer = activeSequence.Segments;
             var existingByIndex = new Dictionary<int, SegmentSelectionModel>();
 
-            // 1) Read from existing session Models
             for (int i = 0; i < Models.Count; i++)
             {
-                var m = Models[i];
-                if (m != null && ReferenceEquals(m.Handle.Provider, Provider))
+                var model = Models[i];
+                if (model != null
+                    && ReferenceEquals(model.Handle.Provider, Provider)
+                    && string.Equals(model.Handle.SequenceName, SequenceName, StringComparison.Ordinal))
                 {
-                    existingByIndex[m.Handle.Index] = m;
+                    existingByIndex[model.Handle.Index] = model;
                 }
             }
 
-            // 2) Read from active Unity selection (essential to capture undo-resurrected instances)
             var currentSelections = Selection.objects.OfType<SegmentSelectionModel>();
-            foreach (var m in currentSelections)
+            foreach (var model in currentSelections)
             {
-                if (m != null && m.Handle.Provider == Provider)
+                if (model != null
+                    && ReferenceEquals(model.Handle.Provider, Provider)
+                    && string.Equals(model.Handle.SequenceName, SequenceName, StringComparison.Ordinal))
                 {
-                    existingByIndex[m.Handle.Index] = m;
+                    existingByIndex[model.Handle.Index] = model;
                 }
             }
 
@@ -64,7 +142,7 @@ namespace TimboJimboEditor.Sequencer
 
                 if (existingByIndex.TryGetValue(i, out var reused) && reused != null)
                 {
-                    reused.Bind(Provider, segment, i);
+                    reused.Bind(Provider, SequenceName, segment, i);
                     nextModels.Add(reused);
                     existingByIndex.Remove(i);
                 }
@@ -72,18 +150,15 @@ namespace TimboJimboEditor.Sequencer
                 {
                     var model = ScriptableObject.CreateInstance<SegmentSelectionModel>();
                     model.hideFlags = HideFlags.DontSave;
-                    model.Bind(Provider, segment, i);
+                    model.Bind(Provider, SequenceName, segment, i);
                     nextModels.Add(model);
                 }
             }
 
-            // Cleanup stale models that don't match any index anymore
             foreach (var stale in existingByIndex.Values)
             {
                 if (stale != null)
-                {
                     UnityEngine.Object.DestroyImmediate(stale);
-                }
             }
 
             Models.Clear();
@@ -100,14 +175,18 @@ namespace TimboJimboEditor.Sequencer
             var uniqueProviders = new HashSet<SequenceProvider>();
 
             var groups = segmentModels
-                .Where(m => m != null && m.Handle.Provider != null && m.Handle.Provider.Sequence != null)
-                .GroupBy(m => m.Handle.Provider);
+                .Where(m => m != null && m.Handle.Provider != null && !string.IsNullOrWhiteSpace(m.Handle.SequenceName))
+                .GroupBy(m => (provider: m.Handle.Provider, sequenceName: m.Handle.SequenceName));
 
             foreach (var group in groups)
             {
-                var provider = group.Key;
-                var segments = provider.Sequence.Segments;
+                var provider = group.Key.provider;
+                var sequenceName = group.Key.sequenceName;
 
+                if (!TryResolveSequence(provider, sequenceName, out var sequence, out _))
+                    continue;
+
+                var segments = sequence.Segments;
                 Undo.RecordObject(provider, "Edit Segment");
 
                 bool changesApplied = false;
@@ -121,15 +200,13 @@ namespace TimboJimboEditor.Sequencer
                     var existing = segments[index];
                     if (existing != null && existing.GetType() == model.Segment.GetType())
                     {
-                        // Overwrite the existing instance in place to preserve its
-                        // [SerializeReference] RefId. Replacing it churns RefIds and
-                        // corrupts Undo/Redo state.
                         JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(model.Segment), existing);
                     }
                     else
                     {
                         segments[index] = CloneSegment(model.Segment);
                     }
+
                     changesApplied = true;
                 }
 
@@ -146,9 +223,7 @@ namespace TimboJimboEditor.Sequencer
             {
                 var window = windows[i];
                 if (window != null && uniqueProviders.Contains(window.Provider))
-                {
                     window.RefreshPlan();
-                }
             }
         }
 
@@ -169,7 +244,8 @@ namespace TimboJimboEditor.Sequencer
             for (int i = 0; i < timingChanges.Count; i++)
             {
                 var change = timingChanges[i];
-                if (change.model == null) continue;
+                if (change.model == null)
+                    continue;
 
                 change.model.StartTime = change.startTime;
                 change.model.Duration = change.duration;
@@ -182,7 +258,6 @@ namespace TimboJimboEditor.Sequencer
         public void StackSegmentsEndToEnd(IReadOnlyList<SegmentSelectionModel> segmentModels)
         {
             var orderedModels = GetOrderedSelectedModels(segmentModels);
-
             if (orderedModels.Count < 2)
                 return;
 
@@ -232,7 +307,9 @@ namespace TimboJimboEditor.Sequencer
                 return new List<SegmentSelectionModel>();
 
             return segmentModels
-                .Where(m => m != null && ReferenceEquals(m.Handle.Provider, Provider))
+                .Where(m => m != null
+                            && ReferenceEquals(m.Handle.Provider, Provider)
+                            && string.Equals(m.Handle.SequenceName, SequenceName, StringComparison.Ordinal))
                 .GroupBy(m => m.Handle.Index)
                 .Select(g => g.First())
                 .OrderBy(m => m.StartTime)
@@ -240,9 +317,7 @@ namespace TimboJimboEditor.Sequencer
                 .ToList();
         }
 
-        private static void CommitAlignedStartTimes(
-            IReadOnlyList<SegmentSelectionModel> orderedModels,
-            Func<SegmentSelectionModel, float> getTargetStartTime)
+        private static void CommitAlignedStartTimes(IReadOnlyList<SegmentSelectionModel> orderedModels, Func<SegmentSelectionModel, float> getTargetStartTime)
         {
             var modelsToCommit = new List<SegmentSelectionModel>(orderedModels.Count);
             for (int i = 0; i < orderedModels.Count; i++)
@@ -260,7 +335,7 @@ namespace TimboJimboEditor.Sequencer
 
         public void AddSegment(Type type, float time)
         {
-            if (Provider == null || Provider.Sequence == null)
+            if (Provider == null || ActiveSequence == null)
                 return;
 
             Segment created;
@@ -278,7 +353,7 @@ namespace TimboJimboEditor.Sequencer
                 timeConfig.SetStartTime(Mathf.Max(0f, time));
 
             Undo.RecordObject(Provider, $"Add {type.Name}");
-            Provider.Sequence.Segments.Add(created);
+            ActiveSequence.Segments.Add(created);
 
             EditorUtility.SetDirty(Provider);
             PrefabUtility.RecordPrefabInstancePropertyModifications(Provider);
@@ -288,76 +363,71 @@ namespace TimboJimboEditor.Sequencer
 
         public void DeleteSegments(IReadOnlyList<SegmentSelectionModel> segmentModels)
         {
-            if (Provider == null || Provider.Sequence == null || segmentModels == null || segmentModels.Count == 0)
+            if (Provider == null || ActiveSequence == null || segmentModels == null || segmentModels.Count == 0)
                 return;
 
             List<int> deletedIndices = new List<int>();
             HashSet<Segment> targetsToDelete = new HashSet<Segment>();
+            var activeSegments = ActiveSequence.Segments;
 
-            foreach (var m in segmentModels)
+            foreach (var model in segmentModels)
             {
-                if (m == null) continue;
-                int index = m.Handle.Index;
-                if (index >= 0 && index < Provider.Sequence.Segments.Count)
+                if (model == null)
+                    continue;
+
+                if (!ReferenceEquals(model.Handle.Provider, Provider)
+                    || !string.Equals(model.Handle.SequenceName, SequenceName, StringComparison.Ordinal))
+                    continue;
+
+                int index = model.Handle.Index;
+                if (index >= 0 && index < activeSegments.Count)
                 {
                     deletedIndices.Add(index);
-                    targetsToDelete.Add(Provider.Sequence.Segments[index]);
+                    targetsToDelete.Add(activeSegments[index]);
                 }
             }
 
             if (targetsToDelete.Count == 0)
                 return;
 
-            // Sort deleted indices ascending so we can calculate shifts deterministically
             deletedIndices.Sort();
 
-            // Record Undo and apply index shifting for each surviving model
             foreach (var model in Models)
             {
-                if (model == null) continue;
+                if (model == null)
+                    continue;
+
                 int oldIndex = model.Handle.Index;
-                
-                // Only shift surviving models
-                if (!deletedIndices.Contains(oldIndex))
-                {
-                    int shift = 0;
-                    foreach (int deletedIdx in deletedIndices)
-                    {
-                        if (deletedIdx < oldIndex)
-                        {
-                            shift++;
-                        }
-                    }
+                if (deletedIndices.Contains(oldIndex))
+                    continue;
 
-                    if (shift > 0)
-                    {
-                        Undo.RecordObject(model, "Delete Segments");
-                        model.Handle = new SegmentHandle(Provider, oldIndex - shift);
-                        model.RefreshDisplayName();
-                    }
+                int shift = 0;
+                foreach (int deletedIdx in deletedIndices)
+                {
+                    if (deletedIdx < oldIndex)
+                        shift++;
+                }
+
+                if (shift > 0)
+                {
+                    Undo.RecordObject(model, "Delete Segments");
+                    model.Handle = new SegmentHandle(Provider, SequenceName, oldIndex - shift);
+                    model.RefreshDisplayName();
                 }
             }
 
-            // Record Undo for the provider
             Undo.RecordObject(Provider, "Delete Segments");
-            
-            // Remove the actual segments from the Provider
-            var seqSegments = Provider.Sequence.Segments;
-            for (int i = seqSegments.Count - 1; i >= 0; i--)
+
+            for (int i = activeSegments.Count - 1; i >= 0; i--)
             {
-                if (targetsToDelete.Contains(seqSegments[i]))
-                {
-                    seqSegments.RemoveAt(i);
-                }
+                if (targetsToDelete.Contains(activeSegments[i]))
+                    activeSegments.RemoveAt(i);
             }
 
-            // Destroy the ScriptableObjects using Unity's Undo so it's fully recorded
             foreach (var model in segmentModels)
             {
                 if (model != null)
-                {
                     Undo.DestroyObjectImmediate(model);
-                }
             }
 
             EditorUtility.SetDirty(Provider);
@@ -368,7 +438,7 @@ namespace TimboJimboEditor.Sequencer
 
         public List<Segment> TryPaste(IReadOnlyList<SegmentTimelineWindow.ClipboardEntry> clipboard, float displayTime, bool isPreviewing)
         {
-            if (Provider == null || Provider.Sequence == null || clipboard == null || clipboard.Count == 0)
+            if (Provider == null || ActiveSequence == null || clipboard == null || clipboard.Count == 0)
                 return null;
 
             float earliestStart = float.MaxValue;
@@ -378,6 +448,7 @@ namespace TimboJimboEditor.Sequencer
                 earliestStart = Mathf.Min(earliestStart, clipboard[i].StartTime);
                 latestEnd = Mathf.Max(latestEnd, clipboard[i].EndTime);
             }
+
             float clipboardDuration = latestEnd - earliestStart;
             float pasteOrigin = isPreviewing
                 ? displayTime - clipboardDuration
@@ -394,14 +465,20 @@ namespace TimboJimboEditor.Sequencer
                     continue;
 
                 Segment segment;
-                try { segment = (Segment)JsonUtility.FromJson(entry.Json, type); }
-                catch { continue; }
+                try
+                {
+                    segment = (Segment)JsonUtility.FromJson(entry.Json, type);
+                }
+                catch
+                {
+                    continue;
+                }
 
                 float newStart = pasteOrigin + (entry.StartTime - earliestStart);
                 if (segment is IStartTimeConfigurable timeConfig)
                     timeConfig.SetStartTime(Mathf.Max(0f, newStart));
 
-                Provider.Sequence.Segments.Add(segment);
+                ActiveSequence.Segments.Add(segment);
                 pasted.Add(segment);
             }
 
@@ -422,6 +499,7 @@ namespace TimboJimboEditor.Sequencer
                 if (Models[i] != null)
                     UnityEngine.Object.DestroyImmediate(Models[i]);
             }
+
             Models.Clear();
         }
 

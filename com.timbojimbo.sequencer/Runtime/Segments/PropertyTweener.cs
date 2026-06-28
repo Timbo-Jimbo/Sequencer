@@ -219,26 +219,8 @@ namespace TimboJimbo.Sequencer.Segments
 
     public static class PropertyTweenerExtensions
     {
-        public static Segment TweenGroup(
-            this SegMake _,
-            GameObject withBindingRoot,
-            Func<TweenGroup, Segment> groupContent
-        )
-        {
-            Assert.IsTrue(withBindingRoot != null, "Tween group's BindingRoot must be set");
-
-            var group = new TweenGroup() { BindingRoot = withBindingRoot };
-            var contentSegment = groupContent(group);
-            
-            return new Sequence()
-            {
-                BindingRoot = withBindingRoot,
-                Segments = { contentSegment },
-            };
-        }
-
         public static PropertyTweener Position(
-            this TweenGroup _,
+            this SegMake _,
             Transform target, 
             TweenStart<Vector3> start,
             TweenEnd<Vector3> end,
@@ -247,9 +229,6 @@ namespace TimboJimbo.Sequencer.Segments
             VectorInterpolationMode interpolationMode = VectorInterpolationMode.Lerp 
         )
         {
-            Assert.IsTrue(_.BindingRoot != null, "Tween group's BindingRoot must be set");
-            Assert.IsTrue(target.IsChildOf(_.BindingRoot.transform), "Target must be a child of the tween group's BindingRoot");
-            
             return new PropertyTweener
             {
                 Property = BindableProperty.CreateThreeComponent(target, "m_LocalPosition", ValueKind.Vector3, "x", "y", "z"),
@@ -264,7 +243,7 @@ namespace TimboJimbo.Sequencer.Segments
         }
 
         public static PropertyTweener Scale(
-            this TweenGroup _,
+            this SegMake _,
             Transform target, 
             TweenStart<Vector3> start,
             TweenEnd<Vector3> end,
@@ -273,9 +252,6 @@ namespace TimboJimbo.Sequencer.Segments
             VectorInterpolationMode interpolationMode = VectorInterpolationMode.Lerp 
         )
         {
-            Assert.IsTrue(_.BindingRoot != null, "Tween group's BindingRoot must be set");
-            Assert.IsTrue(target.IsChildOf(_.BindingRoot.transform), "Target must be a child of the tween group's BindingRoot");
-
             return new PropertyTweener
             {
                 Property = BindableProperty.CreateThreeComponent(target, "m_LocalScale", ValueKind.Vector3, "x", "y", "z"),
@@ -290,7 +266,7 @@ namespace TimboJimbo.Sequencer.Segments
         }
 
         public static PropertyTweener Rotation(
-            this TweenGroup _,
+            this SegMake _,
             Transform target, 
             TweenStart<Quaternion> start,
             TweenEnd<Quaternion> end,
@@ -299,9 +275,6 @@ namespace TimboJimbo.Sequencer.Segments
             RotationInterpolationMode interpolationMode = RotationInterpolationMode.QuaternionSlerp
         )
         {
-            Assert.IsTrue(_.BindingRoot != null, "Tween group's BindingRoot must be set");
-            Assert.IsTrue(target.IsChildOf(_.BindingRoot.transform), "Target must be a child of the tween group's BindingRoot");
-
             return new PropertyTweener
             {
                 Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
@@ -316,7 +289,7 @@ namespace TimboJimbo.Sequencer.Segments
         }
 
         public static PropertyTweener EulerRotation(
-            this TweenGroup _,
+            this SegMake _,
             Transform target, 
             TweenStart<Vector3> start,
             TweenEnd<Vector3> end,
@@ -325,9 +298,6 @@ namespace TimboJimbo.Sequencer.Segments
             RotationInterpolationMode interpolationMode = RotationInterpolationMode.EulerLerp
         )
         {
-            Assert.IsTrue(_.BindingRoot != null, "Tween group's BindingRoot must be set");
-            Assert.IsTrue(target.IsChildOf(_.BindingRoot.transform), "Target must be a child of the tween group's BindingRoot");
-
             return new PropertyTweener
             {
                 Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
@@ -339,48 +309,6 @@ namespace TimboJimbo.Sequencer.Segments
                 EndMode = end.EndMode,
                 Interpolation = new InterpolationConfig { Rotation = interpolationMode }
             };
-        }
-
-        // This isn't a property tweener, but will probably be used in conjunction with them
-        // so we may as well surface it as part of PropetyTweenGroup extensions
-        public static CustomTweener Custom(
-            this TweenGroup _,
-            UnityAction<float> onSample = null, 
-            float duration = 1f, 
-            EaseType ease = EaseType.Linear
-        )
-        {
-            var customTweener = new CustomTweener
-            {
-                Duration = duration,
-                Ease = ease,
-                OnSample = new UnityEvent<float>()
-            };
-
-            if (onSample != null)
-                customTweener.OnSample.AddListener(onSample);
-
-            return customTweener;
-        }
-
-        public static CustomTweener Custom(
-            this TweenGroup _,
-            UnityAction<float, CustomTweenerSampleContext> onSample = null, 
-            float duration = 1f, 
-            EaseType ease = EaseType.Linear
-        )
-        {
-            var customTweener = new CustomTweener
-            {
-                Duration = duration,
-                Ease = ease,
-                OnSampleWithContext = new UnityEvent<float, CustomTweenerSampleContext>()
-            };
-
-            if (onSample != null)
-                customTweener.OnSampleWithContext.AddListener(onSample);
-
-            return customTweener;
         }
     }
 }

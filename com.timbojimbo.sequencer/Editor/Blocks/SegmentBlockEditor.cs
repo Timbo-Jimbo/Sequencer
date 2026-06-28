@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using TimboJimbo.Core.Utility;
 using TimboJimbo.Sequencer;
 using UnityEditor;
@@ -93,7 +94,7 @@ namespace TimboJimboEditor.Sequencer.Blocks
                 pickingMode = PickingMode.Ignore,
             };
 
-            var children = plan.Children;
+            var children = plan.Children.Where(c => c.Timing.AbsoluteDuration > 0).ToList();
             if (children == null || children.Count == 0)
                 return nestedPreviewContainer;
 

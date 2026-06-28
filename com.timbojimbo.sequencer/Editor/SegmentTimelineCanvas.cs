@@ -13,7 +13,10 @@ namespace TimboJimboEditor.Sequencer
         private enum MarqueeMode { Replace, Additive, Subtractive }
 
         private const float RulerHeight = 24f;
-        private const float LaneTop = RulerHeight + 8f;
+        private const float MarkerLaneTop = RulerHeight + 2f;
+        private const float MarkerLaneHeight = 24f;
+        private const float MarkerLaneGap = 4f;
+        private const float LaneTop = MarkerLaneTop + MarkerLaneHeight + MarkerLaneGap;
         private const float LaneHeight = 48f;
         private const float LaneGap = 6f;
         private const float HorizontalPadding = 12f;
@@ -50,6 +53,7 @@ namespace TimboJimboEditor.Sequencer
         public IReadOnlyList<SegmentSelectionModel> SelectedModels => _selection.EffectiveSelection;
 
         private readonly List<PlanBlock> _blocks = new();
+        private readonly List<ZeroDurationMarker> _markers = new();
         private readonly List<SegmentSelectionModel> _models = new();
         private readonly SelectionState _selection = new();
         private readonly List<SegmentSnapCandidate> _segmentSnapCandidates = new();
@@ -178,6 +182,16 @@ namespace TimboJimboEditor.Sequencer
             public VisualElement SelectionHighlight;
             public VisualElement Root;
             public Rect LayoutRect;
+        }
+
+        private sealed class ZeroDurationMarker
+        {
+            public SegmentSelectionModel Model;
+            public VisualElement Root;
+            public VisualElement SelectionHighlight;
+            public Rect LayoutRect;
+            public int ColumnIndex;  // Position in time-based grouping
+            public int ColumnCount;  // Total markers at this time
         }
 
         private sealed class PointerSession
@@ -730,7 +744,7 @@ namespace TimboJimboEditor.Sequencer
             style.backgroundColor = new Color(0.145f, 0.145f, 0.145f);
             style.overflow = Overflow.Hidden;
             focusable = true;
-            
+
             _selectionOutline = new VisualElement
             {
                 style =
@@ -951,6 +965,7 @@ namespace TimboJimboEditor.Sequencer
             }
 
             RebuildBlocks();
+            RebuildZeroDurationMarkers();
 
             if (!_viewWasEverFramed)
                 FrameAllInternal();
@@ -1002,6 +1017,11 @@ namespace TimboJimboEditor.Sequencer
             for (int i = 0; i < _models.Count; i++)
             {
                 var model = _models[i];
+                
+                // Skip zero-duration models; they're handled by RebuildZeroDurationMarkers
+                if (IsZeroDuration(model))
+                    continue;
+
                 var editor = SegmentBlockEditorRegistry.GetEditor(model.Segment);
                 var blockColors = editor.GetBlockColors(model.Segment);
 
@@ -1100,27 +1120,7 @@ namespace TimboJimboEditor.Sequencer
                     evt.StopPropagation();
                 });
 
-                bool zeroDur = IsZeroDuration(model);
-                if (zeroDur)
-                {
-                    planVisual.Root.style.borderTopWidth = 0f;
-                    planVisual.Root.style.borderBottomWidth = 0f;
-                    planVisual.Root.style.borderLeftWidth = 0f;
-                    planVisual.Root.style.borderRightWidth = 0f;
-                    planVisual.Root.style.backgroundColor = Color.clear;
-                    planVisual.Root.style.overflow = Overflow.Visible;
-
-                    var capturedModel = model;
-                    var capturedRoot = planVisual.Root;
-                    planVisual.Root.generateVisualContent += ctx =>
-                    {
-                        DrawZeroDurationMarker(ctx, capturedModel, capturedRoot);
-                    };
-                }
-                else
-                {
-                    editor.OnBlockGUI(model.Segment, planVisual.Root);
-                }
+                editor.OnBlockGUI(model.Segment, planVisual.Root);
 
                 _contentRoot.Add(planVisual.Root);
                 _blocks.Add(planVisual);
@@ -1138,6 +1138,13 @@ namespace TimboJimboEditor.Sequencer
                 block.SelectionHighlight.style.display = selected ? DisplayStyle.Flex : DisplayStyle.None;
             }
 
+            for (int i = 0; i < _markers.Count; i++)
+            {
+                var marker = _markers[i];
+                bool selected = _selection.IsSelected(marker.Model);
+                marker.SelectionHighlight.style.display = selected ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
             using(var scope = new SkipTransitionsScope())
             {
                 scope.Add(_selectionOutline);
@@ -1146,6 +1153,129 @@ namespace TimboJimboEditor.Sequencer
             }
 
             MarkDirtyRepaint();
+        }
+
+        private void RebuildZeroDurationMarkers()
+        {
+            _markers.Clear();
+
+            for (int i = 0; i < _models.Count; i++)
+            {
+                var model = _models[i];
+                
+                // Only handle zero-duration models
+                if (!IsZeroDuration(model))
+                    continue;
+
+                var editor = SegmentBlockEditorRegistry.GetEditor(model.Segment);
+                var markerColors = editor.GetBlockColors(model.Segment);
+
+                var marker = new ZeroDurationMarker
+                {
+                    Model = model,
+                    Root = new VisualElement
+                    {
+                        style =
+                        {
+                            position = Position.Absolute,
+                            borderTopLeftRadius = 4f,
+                            borderTopRightRadius = 4f,
+                            borderBottomLeftRadius = 4f,
+                            borderBottomRightRadius = 4f,
+                            borderTopWidth = 1f,
+                            borderBottomWidth = 1f,
+                            borderLeftWidth = 1f,
+                            borderRightWidth = 1f,
+                            borderTopColor = markerColors.border,
+                            borderBottomColor = markerColors.border,
+                            borderLeftColor = markerColors.border,
+                            borderRightColor = markerColors.border,
+                            backgroundColor = markerColors.fill,
+                            transformOrigin = new TransformOrigin(Length.Percent(50f), Length.Percent(50f)),
+                            transitionProperty = new List<StylePropertyName>() { "left", "top", "width", "height", "translate" },
+                            transitionDuration = new List<TimeValue>() { TimeValue.Milliseconds(125) },
+                            transitionTimingFunction = new List<EasingFunction>() { new EasingFunction(EasingMode.EaseOutCubic) },
+                        }
+                    },
+                    SelectionHighlight = new VisualElement
+                    {
+                        style =
+                        {
+                            position = Position.Absolute,
+                            left = -2f,
+                            top = -2f,
+                            right = -2f,
+                            bottom = -2f,
+                            borderTopWidth = 2f,
+                            borderBottomWidth = 2f,
+                            borderLeftWidth = 2f,
+                            borderRightWidth = 2f,
+                            borderTopLeftRadius = 6f,
+                            borderTopRightRadius = 6f,
+                            borderBottomLeftRadius = 6f,
+                            borderBottomRightRadius = 6f,
+                            borderTopColor = new Color(0.35f, 0.65f, 1f, 0.9f),
+                            borderBottomColor = new Color(0.35f, 0.65f, 1f, 0.9f),
+                            borderLeftColor = new Color(0.35f, 0.65f, 1f, 0.9f),
+                            borderRightColor = new Color(0.35f, 0.65f, 1f, 0.9f),
+                            backgroundColor = new Color(0.35f, 0.65f, 1f, 0.15f),
+                            display = DisplayStyle.None,
+                        },
+                        pickingMode = PickingMode.Ignore,
+                    }
+                };
+
+                marker.Root.Add(marker.SelectionHighlight);
+
+                marker.Root.RegisterCallback<PointerDownEvent>(evt =>
+                {
+                    if (evt.button != 0)
+                        return;
+
+                    Focus();
+
+                    bool shift = evt.shiftKey;
+                    bool action = evt.ctrlKey || evt.commandKey;
+
+                    bool selectedBeforeClick = _selection.IsSelected(marker.Model);
+                    if (!selectedBeforeClick)
+                    {
+                        RequestMarkerClickSelection(marker, shift, action);
+
+                        if (shift || action)
+                        {
+                            evt.StopPropagation();
+                            return;
+                        }
+                    }
+
+                    BeginPointerSession(new PointerSession
+                    {
+                        Mode = PointerSessionMode.BlockPress,
+                        PointerId = evt.pointerId,
+                        PointerStartWorld = evt.position,
+                        PointerStartLocal = this.WorldToLocal(evt.position),
+                        PressedBlock = null,
+                        Shift = shift,
+                        Action = action,
+                        BlockWasSelected = selectedBeforeClick,
+                    });
+
+                    evt.StopPropagation();
+                });
+
+                var capturedModel = model;
+                var capturedRoot = marker.Root;
+                marker.Root.generateVisualContent += ctx =>
+                {
+                    DrawZeroDurationMarker(ctx, capturedModel, capturedRoot);
+                };
+
+                _contentRoot.Add(marker.Root);
+                _markers.Add(marker);
+            }
+
+            RefreshSelectionVisuals();
         }
 
         private bool TryGetSelectionBounds(out Rect bounds, bool includePadding)
@@ -1170,6 +1300,23 @@ namespace TimboJimboEditor.Sequencer
                     continue;
 
                 var layoutRect = block.LayoutRect;
+                if (layoutRect.width <= 0f || layoutRect.height <= 0f)
+                    continue;
+
+                minX = Mathf.Min(minX, layoutRect.xMin);
+                minY = Mathf.Min(minY, layoutRect.yMin);
+                maxX = Mathf.Max(maxX, layoutRect.xMax);
+                maxY = Mathf.Max(maxY, layoutRect.yMax);
+                foundAny = true;
+            }
+
+            for (int i = 0; i < _markers.Count; i++)
+            {
+                var marker = _markers[i];
+                if (!_selection.IsSelected(marker.Model))
+                    continue;
+
+                var layoutRect = marker.LayoutRect;
                 if (layoutRect.width <= 0f || layoutRect.height <= 0f)
                     continue;
 
@@ -1219,6 +1366,20 @@ namespace TimboJimboEditor.Sequencer
                 targetSelection = _selection.BuildToggleSelection(clickedBlock.Model);
             else
                 targetSelection = _selection.BuildSingleSelection(clickedBlock.Model);
+
+            SelectionChanged?.Invoke(targetSelection);
+        }
+
+        private void RequestMarkerClickSelection(ZeroDurationMarker clickedMarker, bool shift, bool action)
+        {
+            if (clickedMarker?.Model == null)
+                return;
+
+            List<SegmentSelectionModel> targetSelection;
+            if (action)
+                targetSelection = _selection.BuildToggleSelection(clickedMarker.Model);
+            else
+                targetSelection = _selection.BuildSingleSelection(clickedMarker.Model);
 
             SelectionChanged?.Invoke(targetSelection);
         }
@@ -1466,9 +1627,12 @@ namespace TimboJimboEditor.Sequencer
             using var scope = new SkipTransitionsScope();
             for (int i = 0; i < _blocks.Count; i++)
                 scope.Add(_blocks[i].Root);
+            for (int i = 0; i < _markers.Count; i++)
+                scope.Add(_markers[i].Root);
             scope.Add(_selectionOutline);
 
             LayoutBlocksInLanes();
+            LayoutZeroDurationMarkers();
             PositionPlayhead();
             PositionPlaybackRangeVisuals();
             UpdateSelectionOutline();
@@ -1563,38 +1727,28 @@ namespace TimboJimboEditor.Sequencer
 
         private void LayoutBlocksInLanes()
         {
+            // Pre-compute display timings (including ghosts) for packing
+            var displayTimings = new Dictionary<PlanBlock, (float start, float duration)>();
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                GetDisplayTiming(_blocks[i].Model, out float start, out float duration);
+                displayTimings[_blocks[i]] = (start, duration);
+            }
+
             var packed = LanePacker.Pack(
                 items: _blocks,
                 itemToInput: block =>
                 {
                     var editor = SegmentBlockEditorRegistry.GetEditor(block.Model.Segment);
+                    var (displayStart, displayDuration) = displayTimings[block];
 
                     return new ()
                     {
                         Data = block,
-                        Start = GetBlockStart(),
-                        End = GetBlockEnd(),
+                        Start = displayStart,
+                        End = displayStart + displayDuration,
                         Group = editor.GetLanePackerGroup(block.Model.Segment),
                     };
-
-                    float GetBlockStart()
-                    {
-                        var isZero = IsZeroDuration(block.Model);
-                        GetDisplayTiming(block.Model, out float referenceStart, out float referenceDuration);
-                        var start = isZero ? referenceStart - (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceStart;
-                        start = Mathf.Max(0f, start);
-                        return start;
-                    }
-
-                    float GetBlockEnd()
-                    {
-                        var isZero = IsZeroDuration(block.Model);
-                        GetDisplayTiming(block.Model, out float referenceStart, out float referenceDuration);
-                        float referenceEnd = referenceStart + referenceDuration;
-                        var end = isZero ? referenceEnd + (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceEnd;
-                        end = Mathf.Max(0f, end);
-                        return end;
-                    }
                 },
                 depenetrateAndCompact: true
             );
@@ -1603,21 +1757,107 @@ namespace TimboJimboEditor.Sequencer
             {
                 var item = packed[i];
                 var block = item.Item;
-                var isZero = IsZeroDuration(block.Model);
-
-                GetDisplayTiming(block.Model, out float start, out float duration);
+                var (start, duration) = displayTimings[block];
 
                 var top = LaneTop + item.Lane * (LaneHeight + LaneGap);
                 var left = TimeToX(start);
-
                 var width = Mathf.Max(TimeToX(start + duration) - left, MinDurationPx);
-                if (isZero)
-                    left -= width * 0.5f;
 
                 block.Root.style.left = left;
                 block.Root.style.top = top;
                 block.Root.style.width = width;
+                block.Root.style.height = LaneHeight;
                 block.LayoutRect = new Rect(left, top, width, LaneHeight);
+            }
+
+            UpdateSelectionOutline();
+        }
+
+        private void LayoutZeroDurationMarkers()
+        {
+            if (_markers.Count == 0)
+                return;
+
+            // Pre-compute display timings (including ghosts) for all markers
+            var displayTimings = new Dictionary<ZeroDurationMarker, (float time, float displayX)>();
+            for (int i = 0; i < _markers.Count; i++)
+            {
+                var marker = _markers[i];
+                GetDisplayTiming(marker.Model, out float start, out float _);
+                float displayX = TimeToX(start);
+                displayTimings[marker] = (start, displayX);
+            }
+
+            // Sort markers by display time for consistent grouping
+            var sortedMarkers = new List<ZeroDurationMarker>(_markers);
+            sortedMarkers.Sort((a, b) => displayTimings[a].time.CompareTo(displayTimings[b].time));
+
+            // Group markers by spatial proximity (threshold-based): markers within MinDurationPx pixels overlap
+            var markersByGroup = new List<List<ZeroDurationMarker>>();
+            float overlapThreshold = MinDurationPx;
+
+            for (int i = 0; i < sortedMarkers.Count; i++)
+            {
+                var marker = sortedMarkers[i];
+                var (_, markerX) = displayTimings[marker];
+                
+                // Try to find an existing group this marker is close to
+                bool foundGroup = false;
+                for (int g = 0; g < markersByGroup.Count; g++)
+                {
+                    var group = markersByGroup[g];
+                    // Check distance to any marker in this group
+                    bool withinThreshold = false;
+                    for (int j = 0; j < group.Count; j++)
+                    {
+                        var (_, groupMarkerX) = displayTimings[group[j]];
+                        if (Mathf.Abs(markerX - groupMarkerX) <= overlapThreshold)
+                        {
+                            withinThreshold = true;
+                            break;
+                        }
+                    }
+                    
+                    if (withinThreshold)
+                    {
+                        group.Add(marker);
+                        foundGroup = true;
+                        break;
+                    }
+                }
+
+                if (!foundGroup)
+                {
+                    markersByGroup.Add(new List<ZeroDurationMarker> { marker });
+                }
+            }
+
+            // Layout each marker group with vertical distribution
+            for (int g = 0; g < markersByGroup.Count; g++)
+            {
+                var group = markersByGroup[g];
+                int columnCount = group.Count;
+                float markerHeight = MarkerLaneHeight / columnCount;
+
+                for (int i = 0; i < group.Count; i++)
+                {
+                    var marker = group[i];
+                    marker.ColumnIndex = i;
+                    marker.ColumnCount = columnCount;
+
+                    var (_, displayX) = displayTimings[marker];
+                    var minWidth = MinDurationPx;
+                    
+                    // Markers positioned in lane at top, stacked vertically
+                    var itemTop = MarkerLaneTop + i * markerHeight;
+                    var itemLeft = displayX - minWidth * 0.5f;
+
+                    marker.Root.style.left = itemLeft;
+                    marker.Root.style.top = itemTop;
+                    marker.Root.style.width = minWidth;
+                    marker.Root.style.height = markerHeight;
+                    marker.LayoutRect = new Rect(itemLeft, itemTop, minWidth, markerHeight);
+                }
             }
 
             UpdateSelectionOutline();
@@ -1865,6 +2105,16 @@ namespace TimboJimboEditor.Sequencer
             painter.LineTo(new Vector2(width, RulerHeight));
             painter.LineTo(new Vector2(width, height));
             painter.LineTo(new Vector2(0, height));
+            painter.ClosePath();
+            painter.Fill();
+
+            // Draw marker lane background
+            painter.fillColor = new Color(0.1f, 0.1f, 0.1f, 0.75f);
+            painter.BeginPath();
+            painter.MoveTo(new Vector2(0, MarkerLaneTop));
+            painter.LineTo(new Vector2(width, MarkerLaneTop));
+            painter.LineTo(new Vector2(width, MarkerLaneTop + MarkerLaneHeight));
+            painter.LineTo(new Vector2(0, MarkerLaneTop + MarkerLaneHeight));
             painter.ClosePath();
             painter.Fill();
 
@@ -2178,6 +2428,8 @@ namespace TimboJimboEditor.Sequencer
                         _selectionTransform.UpdateLinear(dt);
 
                     LayoutBlocksInLanes();
+                    LayoutZeroDurationMarkers();
+                    MarkDirtyRepaint();
 
                     evt.StopPropagation();
                     return;
@@ -2355,7 +2607,7 @@ namespace TimboJimboEditor.Sequencer
 
         private void BuildContextMenu(ContextualMenuPopulateEvent evt)
         {
-            var hit = FindBlockAt(evt);
+            var hitModel = FindModelAt(evt);
             int selectionCount = _selection.EffectiveSelection.Count;
 
             if (selectionCount > 1)
@@ -2366,7 +2618,7 @@ namespace TimboJimboEditor.Sequencer
                 evt.menu.AppendSeparator();
             }
 
-            if (hit != null || selectionCount > 0)
+            if (hitModel != null || selectionCount > 0)
             {
                 evt.menu.AppendAction(selectionCount > 0 ? "Delete Selection" : "Delete Segment", _ =>
                 {
@@ -2374,7 +2626,7 @@ namespace TimboJimboEditor.Sequencer
                     if (selected.Count > 0)
                         DeleteRequested?.Invoke(selected);
                     else
-                        DeleteRequested?.Invoke(new[] { hit.Model });
+                        DeleteRequested?.Invoke(new[] { hitModel });
                 });
                 evt.menu.AppendSeparator();
             }
@@ -2404,6 +2656,27 @@ namespace TimboJimboEditor.Sequencer
             return null;
         }
 
+        private SegmentSelectionModel FindModelAt(IMouseEvent evt)
+        {
+            // Check blocks first (more likely to be hit)
+            for (int i = _blocks.Count - 1; i >= 0; i--)
+            {
+                var blockLocal = _blocks[i].Root.WorldToLocal(evt.mousePosition);
+                if (_blocks[i].Root.contentRect.Contains(blockLocal)) 
+                    return _blocks[i].Model;
+            }
+
+            // Then check markers
+            for (int i = _markers.Count - 1; i >= 0; i--)
+            {
+                var markerLocal = _markers[i].Root.WorldToLocal(evt.mousePosition);
+                if (_markers[i].Root.contentRect.Contains(markerLocal)) 
+                    return _markers[i].Model;
+            }
+
+            return null;
+        }
+
         private Rect UpdateMarqueeBoxRect(Vector2 currentLocal)
         {
             var startLocal = _pointerSession != null ? _pointerSession.PointerStartLocal : currentLocal;
@@ -2426,6 +2699,12 @@ namespace TimboJimboEditor.Sequencer
             {
                 if (_blocks[i].LayoutRect.Overlaps(marqueeLocal))
                     hits.Add(_blocks[i].Model);
+            }
+
+            for (int i = 0; i < _markers.Count; i++)
+            {
+                if (_markers[i].LayoutRect.Overlaps(marqueeLocal))
+                    hits.Add(_markers[i].Model);
             }
 
             return hits;

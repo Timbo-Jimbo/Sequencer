@@ -226,7 +226,7 @@ namespace TimboJimboEditor.Sequencer
                     continue;
 
                 var plan = segment.GetPlan(null);
-                if (plan == null)
+                if (plan == null || plan.Timing.AbsoluteDuration <= 0f)
                     continue;
 
                 float start = Mathf.Max(0f, plan.Timing.AbsoluteStartTime);

@@ -1,4 +1,5 @@
 using TimboJimbo.PropertyBindings;
+using TimboJimbo.Sequencer;
 using TimboJimbo.Sequencer.Segments;
 using TimboJimboEditor.PropertyBindings.Utility;
 using UnityEditor;
@@ -25,9 +26,12 @@ namespace TimboJimboEditor.Sequencer.Segments
             var discreteValueSelectionProp = property.FindPropertyRelative("DiscreteValueSelection");
             var propertyKindProp = bindablePropertyProp.FindPropertyRelative("_kind");
 
+            DrawPropertyField(bindablePropertyProp, propertyKindProp, startValueProp, endValueProp);
+            ValidatePropertyTarget(property, bindablePropertyProp);
+            GUILayout.Space(8);
+            
             EditorGUILayout.PropertyField(startTimeProp);
             EditorGUILayout.PropertyField(durationProp);
-            DrawPropertyField(bindablePropertyProp, propertyKindProp, startValueProp, endValueProp);
             EditorGUILayout.PropertyField(easeProp);
             GUILayout.Space(8);
 
@@ -91,6 +95,70 @@ namespace TimboJimboEditor.Sequencer.Segments
 
             startValueProp.boxedValue = seedValue;
             endValueProp.boxedValue = seedValue;
+        }
+
+        private static void ValidatePropertyTarget(SerializedProperty segmentProperty, SerializedProperty bindablePropertyProp)
+        {
+            var segmentModel = segmentProperty.serializedObject.targetObject as SegmentSelectionModel;
+            var provider = segmentModel?.Handle.Provider;
+            if (provider == null)
+                return;
+
+            if (!TryGetBindableProperty(bindablePropertyProp, out var bindableProperty))
+                return;
+
+            if (!IsTargetOutsideProvider(provider, bindableProperty.Target))
+                return;
+
+            EditorUtility.DisplayDialog(
+                "Invalid Property Target",
+                "The target must be a child of the Sequence Provider.",
+                "OK");
+
+            ClearBindableProperty(bindablePropertyProp);
+        }
+
+        private static bool IsTargetOutsideProvider(SequenceProvider provider, UnityEngine.Object target)
+        {
+            if (provider == null || target == null)
+                return false;
+
+            var targetGo = GetTargetGameObject(target);
+            if (targetGo == null)
+                return false;
+
+            var providerGo = provider.gameObject;
+            if (providerGo == null)
+                return true;
+
+            return !targetGo.transform.IsChildOf(providerGo.transform);
+        }
+
+        private static void ClearBindableProperty(SerializedProperty bindablePropertyProp)
+        {
+            var targetProp = bindablePropertyProp.FindPropertyRelative("_target");
+            var pathProp = bindablePropertyProp.FindPropertyRelative("_path");
+            var kindProp = bindablePropertyProp.FindPropertyRelative("_kind");
+            var componentLayoutProp = bindablePropertyProp.FindPropertyRelative("_componentLayout");
+            var componentOnePathProp = bindablePropertyProp.FindPropertyRelative("_componentOnePath");
+            var componentTwoPathProp = bindablePropertyProp.FindPropertyRelative("_componentTwoPath");
+            var componentThreePathProp = bindablePropertyProp.FindPropertyRelative("_componentThreePath");
+            var componentFourPathProp = bindablePropertyProp.FindPropertyRelative("_componentFourPath");
+
+            if (targetProp == null || pathProp == null || kindProp == null || componentLayoutProp == null ||
+                componentOnePathProp == null || componentTwoPathProp == null || componentThreePathProp == null || componentFourPathProp == null)
+            {
+                return;
+            }
+
+            targetProp.objectReferenceValue = null;
+            pathProp.stringValue = string.Empty;
+            kindProp.enumValueIndex = (int)ValueKind.Invalid;
+            componentLayoutProp.enumValueIndex = (int)ComponentLayout.One;
+            componentOnePathProp.stringValue = string.Empty;
+            componentTwoPathProp.stringValue = string.Empty;
+            componentThreePathProp.stringValue = string.Empty;
+            componentFourPathProp.stringValue = string.Empty;
         }
 
         private static ValueContainer ResolveSeedValue(SerializedProperty bindablePropertyProp, ValueKind expectedKind)

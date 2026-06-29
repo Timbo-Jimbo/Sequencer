@@ -1,223 +1,286 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using TimboJimbo.Sequencer;
 using TimboJimbo.Sequencer.Segments;
 using TimboJimboEditor.Sequencer.Blocks;
 using UnityEditor;
-using UnityEditor.UIElements;
 using UnityEngine;
-using UnityEngine.UIElements;
 
 namespace TimboJimboEditor.Sequencer
 {
     [CustomEditor(typeof(SequenceProvider))]
     public sealed class SequenceSegmentProviderEditor : Editor
     {
-        public override VisualElement CreateInspectorGUI()
-        {
-            var root = new VisualElement
-            {
-                style =
-                {
-                    paddingLeft = 2f,
-                    paddingRight = 2f,
-                    paddingTop = 2f,
-                    paddingBottom = 2f,
-                }
-            };
+        private static GUIStyle CurrentlyEditingTextStyle;
+        private SequenceProvider _provider;
+        private readonly Dictionary<Sequence, CachedSequencePreview> _previewCache = new();
 
-            RebuildRoot(root);
-            return root;
+        private sealed class CachedSequencePreview
+        {
+            public int Signature;
+            public List<(Rect normalizedRect, Color fill, Color border)> RectsToDraw = new();
+
+            public void Draw(Rect previewRect)
+            {
+                const float padding = 4f;
+                const float laneGap = 2f;
+                var verts = new Vector3[4];
+                
+                previewRect.x = previewRect.x + (padding);
+                previewRect.y = previewRect.y + ((padding - laneGap));
+                previewRect.width = previewRect.width - (2f * padding);
+                previewRect.height = previewRect.height - (2f * (padding - laneGap));
+
+                foreach (var (normalizedRect, fill, border) in RectsToDraw)
+                {
+                    var drawRect = new Rect(
+                        previewRect.x + (normalizedRect.x * previewRect.width),
+                        previewRect.y + (normalizedRect.y * previewRect.height),
+                        normalizedRect.width * previewRect.width,
+                        normalizedRect.height * previewRect.height
+                    );
+
+                    drawRect.x = (drawRect.x);
+                    drawRect.y = (drawRect.y) + laneGap;
+                    drawRect.width = (drawRect.width);
+                    drawRect.height = (drawRect.height) - (2f * laneGap);
+
+                    verts[0] = new Vector3(drawRect.xMin, drawRect.yMin);
+                    verts[1] = new Vector3(drawRect.xMax, drawRect.yMin);
+                    verts[2] = new Vector3(drawRect.xMax, drawRect.yMax);
+                    verts[3] = new Vector3(drawRect.xMin, drawRect.yMax);
+
+                    Handles.DrawSolidRectangleWithOutline(verts, fill, border * 0.8f);
+                }
+            }
         }
 
-        private void RebuildRoot(VisualElement root)
+        private static bool SequencesFoldoutExpanded
         {
-            root.Clear();
+            get => SessionState.GetBool("SequenceSegmentProviderEditor.SequencesFoldoutExpanded", true);
+            set => SessionState.SetBool("SequenceSegmentProviderEditor.SequencesFoldoutExpanded", value);
+        }
+
+        private void OnEnable()
+        {
+            _provider = (SequenceProvider)target;
+            Undo.undoRedoPerformed += OnUndoRedoPerformed;
+        }
+
+        private void OnDisable()
+        {
+            Undo.undoRedoPerformed -= OnUndoRedoPerformed;
+            InvalidatePreviewCache();
+        }
+
+        private void OnUndoRedoPerformed()
+        {
+            InvalidatePreviewCache();
+            Repaint();
+        }
+
+        public override void OnInspectorGUI()
+        {
+            serializedObject.Update();
 
             if (targets.Length > 1)
             {
-                root.Add(new HelpBox("Multi-object editing is not supported for sequence management.", HelpBoxMessageType.Info));
+                EditorGUILayout.HelpBox("Multi-object editing is not supported for sequence management.", MessageType.Info);
+                serializedObject.ApplyModifiedProperties();
                 return;
             }
 
-            var provider = (SequenceProvider)target;
+            var provider = _provider != null ? _provider : (SequenceProvider)target;
             if (provider == null)
+            {
+                serializedObject.ApplyModifiedProperties();
                 return;
+            }
 
             provider.Sequences ??= new List<Sequence>();
 
-            var scriptField = new ObjectField("Script")
-            {
-                value = MonoScript.FromMonoBehaviour(provider),
-                objectType = typeof(MonoScript),
-                allowSceneObjects = false,
-            };
-            scriptField.SetEnabled(false);
-            root.Add(scriptField);
+            SequencesEditorGUI.DrawFoldout(
+                expanded: SequencesFoldoutExpanded,
+                drawContent: () =>
+                {
+                    EditorGUILayout.LabelField("Sequences", EditorStyles.boldLabel);
+                    GUILayout.FlexibleSpace();
 
-            var headerRow = new VisualElement
+                    using (new EditorGUI.DisabledScope(Application.isPlaying))
+                    {
+                        if (SequencesEditorGUI.AddButton())
+                        {
+                            AddSequence(provider);
+                            InvalidatePreviewCache();
+                            EditorUtility.SetDirty(provider);
+                            GUI.FocusControl(null);
+                        }
+                    }
+                },
+                onToggle: value => SequencesFoldoutExpanded = value
+            );
+
+            if (!SequencesFoldoutExpanded)
             {
-                style =
-                {
-                    flexDirection = FlexDirection.Row,
-                    alignItems = Align.Center,
-                    marginTop = 6f,
-                    marginBottom = 4f,
-                }
-            };
-            headerRow.Add(new Label("Sequences")
-            {
-                style =
-                {
-                    unityFontStyleAndWeight = FontStyle.Bold,
-                    flexGrow = 1f,
-                }
-            });
-            headerRow.Add(new Button(() =>
-            {
-                AddSequence(provider);
-                RebuildRoot(root);
-            }) { text = "Add" });
-            root.Add(headerRow);
+                serializedObject.ApplyModifiedProperties();
+                return;
+            }
+
+            EditorGUILayout.Space(EditorGUIUtility.standardVerticalSpacing * 2f);
 
             if (provider.Sequences.Count == 0)
             {
-                root.Add(new HelpBox("No sequences yet. Add one to start editing in the timeline.", HelpBoxMessageType.None));
+                EditorGUILayout.HelpBox("No sequences yet. Add one to start editing in the timeline.", MessageType.None);
             }
 
             for (int i = 0; i < provider.Sequences.Count; i++)
-                root.Add(CreateSequenceRow(root, provider, i));
-
-            root.Add(new VisualElement { style = { height = 6f } });
-            root.Add(new Button(() => SegmentTimelineWindow.Open(provider)) { text = "Open Timeline" });
-        }
-
-        private VisualElement CreateSequenceRow(VisualElement root, SequenceProvider provider, int index)
-        {
-            var container = new VisualElement
             {
-                style =
-                {
-                    marginBottom = 6f,
-                    paddingLeft = 6f,
-                    paddingRight = 6f,
-                    paddingTop = 6f,
-                    paddingBottom = 6f,
-                    borderTopWidth = 1f,
-                    borderBottomWidth = 1f,
-                    borderLeftWidth = 1f,
-                    borderRightWidth = 1f,
-                    borderTopColor = new Color(0.25f, 0.25f, 0.25f),
-                    borderBottomColor = new Color(0.25f, 0.25f, 0.25f),
-                    borderLeftColor = new Color(0.25f, 0.25f, 0.25f),
-                    borderRightColor = new Color(0.25f, 0.25f, 0.25f),
-                    borderTopLeftRadius = 3f,
-                    borderTopRightRadius = 3f,
-                    borderBottomLeftRadius = 3f,
-                    borderBottomRightRadius = 3f,
-                }
-            };
+                if (DrawSequenceRow(provider, i))
+                    break;
 
-            if (index < 0 || index >= provider.Sequences.Count)
-                return container;
-
-            var sequence = provider.Sequences[index];
-            if (sequence == null)
-            {
-                container.Add(new Label("(Missing sequence)") { style = { unityFontStyleAndWeight = FontStyle.Bold } });
-                container.Add(new Button(() =>
-                {
-                    Undo.RecordObject(provider, "Remove Sequence");
-                    provider.Sequences.RemoveAt(index);
-                    MarkProviderDirty(provider);
-                    RebuildRoot(root);
-                }) { text = "Remove" });
-                return container;
+                EditorGUILayout.Space(EditorGUIUtility.standardVerticalSpacing * 2f);
             }
 
-            var row = new VisualElement
-            {
-                style =
-                {
-                    flexDirection = FlexDirection.Row,
-                    alignItems = Align.Center,
-                    marginBottom = 6f,
-                }
-            };
-
-            var nameField = new TextField
-            {
-                value = sequence.Name ?? string.Empty,
-                isDelayed = true,
-                style = { flexGrow = 1f, marginRight = 6f }
-            };
-            nameField.RegisterValueChangedCallback(evt =>
-            {
-                string currentName = sequence.Name ?? string.Empty;
-                if (string.Equals(currentName, evt.newValue, StringComparison.Ordinal))
-                    return;
-
-                RenameSequence(provider, sequence, evt.newValue);
-                RebuildRoot(root);
-            });
-            row.Add(nameField);
-
-            row.Add(new Button(() => SegmentTimelineWindow.Open(provider, sequence.Name))
-            {
-                text = "Edit",
-                style = { width = 52f, marginRight = 4f }
-            });
-
-            var menuButton = new Button(() => ShowSequenceMenu(provider, index, () => RebuildRoot(root)))
-            {
-                text = "⋮",
-                style = { width = 24f }
-            };
-            row.Add(menuButton);
-
-            container.Add(row);
-
-            var preview = new VisualElement
-            {
-                style =
-                {
-                    position = Position.Relative,
-                    height = 46f,
-                    borderTopWidth = 1f,
-                    borderBottomWidth = 1f,
-                    borderLeftWidth = 1f,
-                    borderRightWidth = 1f,
-                    borderTopLeftRadius = 3f,
-                    borderTopRightRadius = 3f,
-                    borderBottomLeftRadius = 3f,
-                    borderBottomRightRadius = 3f,
-                    paddingTop = 1f,
-                    paddingBottom = 1f,
-                    paddingLeft = 1f,
-                    paddingRight = 1f,
-                    overflow = Overflow.Hidden,
-                    backgroundColor = new Color(0.122f, 0.122f, 0.122f, 0.75f),
-                }
-            };
-
-            preview.style.borderTopColor = new Color(0.24f, 0.24f, 0.24f);
-            preview.style.borderBottomColor = new Color(0.24f, 0.24f, 0.24f);
-            preview.style.borderLeftColor = new Color(0.24f, 0.24f, 0.24f);
-            preview.style.borderRightColor = new Color(0.24f, 0.24f, 0.24f);
-
-            BuildMiniTimelinePreview(sequence, preview);
-
-            container.Add(preview);
-            return container;
+            serializedObject.ApplyModifiedProperties();
         }
 
-        private static void BuildMiniTimelinePreview(Sequence sequence, VisualElement preview)
+        private bool DrawSequenceRow(SequenceProvider provider, int index)
         {
-            if (sequence == null || preview == null || sequence.Segments == null || sequence.Segments.Count == 0)
+            bool requestRebuild = false;
+
+            if (index < 0 || index >= provider.Sequences.Count)
+                return false;
+
+            var sequence = provider.Sequences[index];
+            bool isMissing = sequence == null;
+            bool isOpenInTimeline = !isMissing && SegmentTimelineWindow.IsSequenceContextOpen(provider, sequence.Name);
+
+            using (new EditorGUILayout.VerticalScope())
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (isMissing)
+                    {
+                        EditorGUILayout.LabelField("(Missing sequence)", EditorStyles.boldLabel);
+                    }
+                    else
+                    {
+                        using (new EditorGUI.DisabledScope(isOpenInTimeline))
+                        {
+                            EditorGUI.BeginChangeCheck();
+                            string newName = EditorGUILayout.TextField(sequence.Name ?? string.Empty, GUILayout.ExpandWidth(true));
+                            if (EditorGUI.EndChangeCheck())
+                            {
+                                RenameSequence(provider, sequence, newName);
+                                requestRebuild = true;
+                            }
+                        }
+                    }
+
+                    if (isMissing)
+                    {
+                        if (GUILayout.Button("Remove", GUILayout.Width(64f)))
+                        {
+                            Undo.RecordObject(provider, "Remove Sequence");
+                            provider.Sequences.RemoveAt(index);
+                            MarkProviderDirty(provider);
+                            return true;
+                        }
+                    }
+                    else
+                    {
+                        using (new EditorGUI.DisabledScope(isOpenInTimeline))
+                        {
+                            SequencesEditorGUI.ButtonGroupButton(
+                                content: new GUIContent("Edit"),
+                                buttonIndex: 0,
+                                buttonCount: 2,
+                                onClick: () => SegmentTimelineWindow.Open(provider, sequence.Name),
+                                options: GUILayout.Width(64f));
+
+                            if (SequencesEditorGUI.ButtonGroupButton(
+                                    content: new GUIContent("✕", "Remove this sequence"),
+                                    buttonIndex: 1,
+                                    buttonCount: 2,
+                                    options: GUILayout.Width(24f)))
+                            {
+                                RemoveSequence(provider, index);
+                                InvalidatePreviewCache();
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                DrawMiniTimelinePreview(sequence, isOpenInTimeline);
+            }
+
+            if (requestRebuild)
+            {
+                InvalidatePreviewCache();
+                GUI.changed = true;
+            }
+
+            return requestRebuild;
+        }
+
+        private void DrawMiniTimelinePreview(Sequence sequence, bool isOpenInTimeline)
+        {
+            if (!TryGetOrBuildCachedPreview(sequence, out var cachedPreview) || cachedPreview == null || cachedPreview.RectsToDraw.Count == 0)
                 return;
 
-            var entries = new List<PreviewEntry>();
-            float maxEnd = 0f;
+            var previewRect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(50), GUILayout.ExpandWidth(true));
+
+            previewRect.xMin += 2f;
+            previewRect.xMax -= 2f;
+            
+            EditorGUI.DrawRect(previewRect, new Color(0.122f, 0.122f, 0.122f, 0.75f));
+            cachedPreview.Draw(previewRect);
+
+            if (isOpenInTimeline)
+            {
+                EditorGUI.DrawRect(previewRect, new Color(0.182f, 0.182f, 0.182f, 0.85f));
+
+                if(CurrentlyEditingTextStyle == null)
+                {
+                    CurrentlyEditingTextStyle = new GUIStyle(EditorStyles.label)
+                    {
+                        fontStyle = FontStyle.Italic,
+                        fontSize = 10,
+                        normal = { textColor = new Color(0.85f, 0.85f, 0.85f, 1f) },
+                        alignment = TextAnchor.MiddleCenter,
+                        clipping = TextClipping.Clip,
+                    };
+                }
+                EditorGUI.LabelField(previewRect, "Editing...", CurrentlyEditingTextStyle);
+            }
+        }
+
+        private bool TryGetOrBuildCachedPreview(Sequence sequence, out CachedSequencePreview preview)
+        {
+            preview = null;
+
+            if (sequence == null || sequence.Segments == null || sequence.Segments.Count == 0)
+                return false;
+
+            int signature = ComputeSequenceSignature(sequence);
+
+            if (_previewCache.TryGetValue(sequence, out var cached)
+                && cached != null
+                && cached.Signature == signature)
+            {
+                preview = cached;
+                return true;
+            }
+
+            cached = new CachedSequencePreview
+            {
+                Signature = signature,
+            };
+
+            List<(float Start, float End, Segment Segment)> entries = new();
 
             for (int i = 0; i < sequence.Segments.Count; i++)
             {
@@ -232,102 +295,75 @@ namespace TimboJimboEditor.Sequencer
                 float start = Mathf.Max(0f, plan.Timing.AbsoluteStartTime);
                 float duration = Mathf.Max(0f, plan.Timing.AbsoluteDuration);
                 float end = Mathf.Max(start, start + duration);
-                maxEnd = Mathf.Max(maxEnd, end);
 
-                entries.Add(new PreviewEntry(segment, start, end));
+                entries.Add((start, end, segment));
             }
 
-            if (entries.Count == 0)
-                return;
-
+            //pack
             var packed = LanePacker.Pack(
                 items: entries,
-                itemToInput: entry => new LanePacker.PackInput<PreviewEntry>
+                itemToInput: entry => new LanePacker.PackInput<(float Start, float End, Segment Segment)>
                 {
                     Data = entry,
                     Group = SegmentBlockEditorRegistry.GetEditor(entry.Segment).GetLanePackerGroup(entry.Segment),
                     Start = entry.Start,
                     End = Mathf.Max(entry.End, entry.Start + 0.001f),
                 },
-                depenetrateAndCompact: true);
+                depenetrateAndCompact: true
+            );
+            
+            //convert packed to normalized draw rects
+            var maxEnd = packed.Count > 0 ? packed.Max(x => x.Item.End) : 0f;
+            var lanes = packed.Count > 0 ? packed.Max(x => x.Lane) + 1 : 1;
 
-            int laneCount = 1;
-            for (int i = 0; i < packed.Count; i++)
-                laneCount = Mathf.Max(laneCount, packed[i].Lane + 1);
-
-            float timelineDuration = Mathf.Max(0.1f, maxEnd);
-
-            for (int i = 0; i < packed.Count; i++)
+            foreach (var pair in packed)
             {
-                var pair = packed[i];
                 var entry = pair.Item;
+                float duration = Mathf.Max(0f, entry.End - entry.Start);
+                float leftPercent = Mathf.Clamp01(entry.Start / maxEnd);
+                float widthPercent = Mathf.Clamp01(duration / maxEnd);
+                float topPercent = (pair.Lane / (float)lanes);
+                float laneHeightPercent = (1f / lanes);
+
+                var normalizedRect = new Rect(leftPercent, topPercent, widthPercent, laneHeightPercent);
                 var editor = SegmentBlockEditorRegistry.GetEditor(entry.Segment);
                 var (fill, border) = editor.GetBlockColors(entry.Segment);
-                border.a = 0.25f;
 
-                float duration = Mathf.Max(0f, entry.End - entry.Start);
-                float leftPercent = Mathf.Clamp01(entry.Start / timelineDuration) * 100f;
-                float widthPercent = Mathf.Clamp01(duration / timelineDuration) * 100f;
-                float topPercent = (pair.Lane / (float)laneCount) * 100f;
-                float laneHeightPercent = (1f / laneCount) * 100f;
+                cached.RectsToDraw.Add((normalizedRect, fill, border));
+            }
 
-                var blockContainer = new VisualElement
+            _previewCache[sequence] = cached;
+            preview = cached;
+            return true;
+        }
+
+        private static int ComputeSequenceSignature(Sequence sequence)
+        {
+            unchecked
+            {
+                int hash = 17;
+                var segments = sequence.Segments;
+                hash = hash * 31 + segments.Count;
+                for (int i = 0; i < segments.Count; i++)
                 {
-                    style =
+                    var segment = segments[i];
+                    if (segment == null)
                     {
-                        position = Position.Absolute,
-                        left = Length.Percent(leftPercent),
-                        top = Length.Percent(topPercent),
-                        width = Length.Percent(widthPercent),
-                        minWidth = 6f,
-                        height = Length.Percent(laneHeightPercent),
-                    },
-                    tooltip = ObjectNames.NicifyVariableName(entry.Segment.GetType().Name),
-                };
-
-                var blockVisual = new VisualElement
-                {
-                    style =
-                    {
-                        position = Position.Absolute,
-                        left = 0.5f,
-                        top = 0.5f,
-                        right = 0.5f,
-                        bottom = 0.5f,
-                        backgroundColor = fill,
-                        borderTopWidth = 1f,
-                        borderBottomWidth = 1f,
-                        borderLeftWidth = 1f,
-                        borderRightWidth = 1f,
-                        borderTopColor = border,
-                        borderBottomColor = border,
-                        borderLeftColor = border,
-                        borderRightColor = border,
-                        borderTopLeftRadius = 2f,
-                        borderTopRightRadius = 2f,
-                        borderBottomLeftRadius = 2f,
-                        borderBottomRightRadius = 2f,
+                        hash = hash * 31;
+                        continue;
                     }
-                };
 
-                blockContainer.Add(blockVisual);
+                    hash = hash * 31 + RuntimeHelpers.GetHashCode(segment);
+                    hash = hash * 31 + segment.GetHashCode();
+                }
 
-                preview.Add(blockContainer);
+                return hash;
             }
         }
 
-        private readonly struct PreviewEntry
+        private void InvalidatePreviewCache()
         {
-            public readonly Segment Segment;
-            public readonly float Start;
-            public readonly float End;
-
-            public PreviewEntry(Segment segment, float start, float end)
-            {
-                Segment = segment;
-                Start = start;
-                End = end;
-            }
+            _previewCache.Clear();
         }
 
         private static void AddSequence(SequenceProvider provider)
@@ -360,56 +396,6 @@ namespace TimboJimboEditor.Sequencer
 
             Undo.RecordObject(provider, "Rename Sequence");
             sequence.Name = unique;
-            MarkProviderDirty(provider);
-        }
-
-        private static void ShowSequenceMenu(SequenceProvider provider, int index, Action onChanged)
-        {
-            var menu = new GenericMenu();
-
-            if (index >= 0 && index < provider.Sequences.Count && provider.Sequences[index] != null)
-            {
-                var sequence = provider.Sequences[index];
-                menu.AddItem(new GUIContent("Edit in Timeline"), false, () => SegmentTimelineWindow.Open(provider, sequence.Name));
-                menu.AddSeparator(string.Empty);
-            }
-            else
-            {
-                menu.AddDisabledItem(new GUIContent("Edit in Timeline"));
-                menu.AddSeparator(string.Empty);
-            }
-
-            menu.AddItem(new GUIContent("Duplicate"), false, () =>
-            {
-                DuplicateSequence(provider, index);
-                onChanged?.Invoke();
-            });
-            menu.AddItem(new GUIContent("Remove"), false, () =>
-            {
-                RemoveSequence(provider, index);
-                onChanged?.Invoke();
-            });
-            menu.ShowAsContext();
-        }
-
-        private static void DuplicateSequence(SequenceProvider provider, int index)
-        {
-            if (index < 0 || index >= provider.Sequences.Count)
-                return;
-
-            var source = provider.Sequences[index];
-            if (source == null)
-                return;
-
-            Undo.RecordObject(provider, "Duplicate Sequence");
-
-            string baseName = string.IsNullOrWhiteSpace(source.Name) ? "Sequence" : source.Name;
-            string duplicateName = TimelineSessionState.MakeUniqueSequenceName(provider.Sequences, $"{baseName} Copy");
-
-            var duplicate = JsonUtility.FromJson<Sequence>(JsonUtility.ToJson(source));
-            duplicate.Name = duplicateName;
-
-            provider.Sequences.Insert(index + 1, duplicate);
             MarkProviderDirty(provider);
         }
 

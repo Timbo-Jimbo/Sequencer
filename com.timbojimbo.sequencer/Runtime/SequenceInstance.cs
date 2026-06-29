@@ -377,13 +377,9 @@ namespace TimboJimbo.Sequencer
                 });
             }
 
-            // We want to preserve insertion order for playbacks with the same start time,
-            //  so we use index as a tie-breaker when sorting keyframes
             return keyframes
-                .Select((keyframe, index) => new { keyframe, index })
-                .OrderBy(x => x.keyframe.AbsoluteTime)
-                .ThenBy(x => x.index)
-                .Select(x => x.keyframe)
+                .OrderBy(x => x.AbsoluteTime)
+                .ThenBy(x => x.Playback.ExecutionOrder)
                 .ToList();
         }
 
@@ -478,7 +474,7 @@ namespace TimboJimbo.Sequencer
         {
             private readonly SequenceInstance _owner;
             private readonly List<Keyframe> _keyframes;
-            private readonly HashSet<SegmentPlayback> _activePlaybacks = new();
+            private readonly List<SegmentPlayback> _activePlaybacks = new();
             private readonly Action _cleanUpAllPlaybacks;
             private readonly Action _setupAllPlaybacks;
             private readonly Action _restoreInitialValues;
@@ -613,7 +609,21 @@ namespace TimboJimbo.Sequencer
                     {
                         case KeyframeType.Enter:
                             keyframe.Playback.OnEnter(in boundaryContext);
-                            _activePlaybacks.Add(keyframe.Playback);
+
+                            var inserted = false;
+                            for (int i = 0; i < _activePlaybacks.Count; i++)
+                            {
+                                if (_activePlaybacks[i].ExecutionOrder > keyframe.Playback.ExecutionOrder)
+                                {
+                                    _activePlaybacks.Insert(i, keyframe.Playback);
+                                    inserted = true;
+                                    break;
+                                }
+                            }
+
+                            if (!inserted)
+                                _activePlaybacks.Add(keyframe.Playback);
+
                             break;
                         case KeyframeType.Exit:
                             keyframe.Playback.OnExit(in boundaryContext);

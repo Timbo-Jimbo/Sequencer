@@ -31,7 +31,7 @@ namespace TimboJimboEditor.Sequencer.Blocks
             };
 
             if(embeddedSequenceProvider.Provider != null)
-                label.text = embeddedSequenceProvider.Provider.ToString();
+                label.text = embeddedSequenceProvider.Provider.gameObject.name;
 
             block.Add(label);
 

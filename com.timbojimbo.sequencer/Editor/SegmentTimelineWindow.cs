@@ -27,7 +27,9 @@ namespace TimboJimboEditor.Sequencer
         private static readonly List<ClipboardEntry> _clipboard = new();
 
         private TimelineSessionState _sessionState;
+        private Image _providerIcon;
         private Label _providerLabel;
+
         private PopupField<string> _sequencePopup;
         private SegmentTimelineCanvas _canvas;
         private ToolbarToggle _playToggle;
@@ -88,6 +90,28 @@ namespace TimboJimboEditor.Sequencer
             var window = GetWindow<SegmentTimelineWindow>("Segment Timeline");
             if (provider != null)
                 window.SetProvider(provider, sequenceName, forceReinitialize: true);
+        }
+
+        internal static bool IsSequenceContextOpen(SequenceProvider provider, string sequenceName)
+        {
+            if (provider == null || string.IsNullOrWhiteSpace(sequenceName))
+                return false;
+
+            var windows = Resources.FindObjectsOfTypeAll<SegmentTimelineWindow>();
+            for (int i = 0; i < windows.Length; i++)
+            {
+                var window = windows[i];
+                if (window == null)
+                    continue;
+
+                if (!ReferenceEquals(window.Provider, provider))
+                    continue;
+
+                if (string.Equals(window.SequenceName, sequenceName, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
         }
 
         internal static void NotifyProviderChanged(SequenceProvider provider)
@@ -165,18 +189,42 @@ namespace TimboJimboEditor.Sequencer
             rootVisualElement.Clear();
 
             var toolbar = new Toolbar();
+
+            var providerDetailsContainer = new VisualElement
+            {
+                style =
+                {
+                    flexDirection = FlexDirection.Row,
+                    alignItems = Align.Center,
+                    justifyContent = Justify.FlexStart,
+                    marginLeft = 4f,
+                }
+            };
+            toolbar.Add(providerDetailsContainer);
+
+            _providerIcon = new Image
+            {
+                style =
+                {
+                    width = 14,
+                    height = 14,
+                    flexShrink = 0,
+                    marginRight = 4,
+                    display = DisplayStyle.None
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            providerDetailsContainer.Add(_providerIcon);
+
             _providerLabel = new Label("(no provider)")
             {
                 style =
                 {
                     unityTextAlign = TextAnchor.MiddleLeft,
-                    marginLeft = 6,
-                    marginRight = 12,
                 }
             };
-            toolbar.Add(_providerLabel);
+            providerDetailsContainer.Add(_providerLabel);
 
-            toolbar.Add(new Label("Sequence") { style = { marginRight = 4f, unityTextAlign = TextAnchor.MiddleLeft } });
             _sequencePopup = new PopupField<string>(new List<string> { "(none)" }, 0)
             {
                 style = { minWidth = 140f, marginRight = 4f }
@@ -186,7 +234,7 @@ namespace TimboJimboEditor.Sequencer
                 if (!string.Equals(evt.newValue, SequenceName, StringComparison.Ordinal))
                     SetProvider(Provider, evt.newValue, forceReinitialize: true);
             });
-            toolbar.Add(_sequencePopup);
+            providerDetailsContainer.Add(_sequencePopup);
 
             _playToggle = new ToolbarToggle { text = "Play" };
             _playToggle.RegisterValueChangedCallback(evt => SetPlaying(evt.newValue));
@@ -314,35 +362,8 @@ namespace TimboJimboEditor.Sequencer
 
         private void OnSelectionChanged()
         {
-            if (_isSyncingSelection)
-                return;
-
-            if (IsPreviewing || IsRecording)
-            {
+            if (!_isSyncingSelection)
                 SyncCanvasSelection();
-                return;
-            }
-
-            var selectedModels = Selection.objects.OfType<SegmentSelectionModel>().ToList();
-            var selectedModel = selectedModels.FirstOrDefault(m => m != null && m.Handle.Provider != null);
-            var modelProvider = selectedModel?.Handle.Provider;
-            var modelSequenceName = selectedModel?.Handle.SequenceName;
-
-            var selectedGo = Selection.activeGameObject;
-            var selectedGoProvider = selectedGo != null ? selectedGo.GetComponentInParent<SequenceProvider>() : null;
-
-            var provider = selectedGoProvider ?? modelProvider;
-            var targetSequenceName = selectedGoProvider != null ? SequenceName : modelSequenceName;
-
-            if (selectedGoProvider != null)
-                targetSequenceName = TimelineSessionState.ResolveValidSequenceName(selectedGoProvider, targetSequenceName);
-
-            bool providerChanged = !ReferenceEquals(Provider, provider);
-            bool sequenceChanged = provider != null && !string.Equals(SequenceName, targetSequenceName, StringComparison.Ordinal);
-            if (Provider == null || providerChanged || sequenceChanged)
-                SetProvider(provider, targetSequenceName, forceReinitialize: true);
-
-            SyncCanvasSelection();
         }
 
         private void OnUndoRedo()
@@ -350,7 +371,7 @@ namespace TimboJimboEditor.Sequencer
             if (Provider == null)
                 return;
 
-            SetProvider(Provider, SequenceName, forceReinitialize: true);
+            SetProvider(Provider, SequenceName, forceReinitialize: false);
         }
 
         private void SetProvider(SequenceProvider provider, string sequenceName = null, bool forceReinitialize = false)
@@ -361,12 +382,18 @@ namespace TimboJimboEditor.Sequencer
             bool contextChanged = !providerSame || !sequenceSame;
 
             if (!forceReinitialize && providerSame && sequenceSame && Provider != null)
+            {
+                RefreshPlan();
+                UpdatePreviewVisuals();
                 return;
+            }
 
             StopRecording(commit: false);
             DisposePreviewSession();
 
             _sessionState.Bind(provider, resolvedSequenceName);
+            _providerIcon.image = Provider != null ? EditorGUIUtility.ObjectContent(Provider.gameObject, typeof(GameObject)).image : null;
+            _providerIcon.style.display = Provider != null ? DisplayStyle.Flex : DisplayStyle.None;
             _providerLabel.text = Provider != null ? $"{Provider.gameObject.name}" : "No Selected Provider";
 
             _serializedProvider?.Dispose();

@@ -93,6 +93,7 @@ namespace TimboJimbo.Sequencer
 
     public abstract class SegmentPlayback
     {
+        public int ExecutionOrder;
         public float AbsoluteStartTime;
         public float AbsoluteDuration;
         public float AbsoluteEndTime => AbsoluteStartTime + AbsoluteDuration;

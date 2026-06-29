@@ -941,15 +941,11 @@ namespace TimboJimboEditor.Sequencer
             }
 
             _recordableProperties = new List<BindableProperty>();
-            //todo: we should force Provider to be the binding root, because otherwise the 
-            //recording scope is unbounded and we need to ie capture the whole hierarchy (which, actually, isn't sufficient since 
-            // the current setup technically allows you to animate properties on different hierarchies..except the editor tooling wouldnt support it 
-            // properly..!) It is an editor tooling restriction.
-            BindablePropertyUtility.GetBindableProperties(Provider.transform.root.gameObject, _recordableProperties, recursive: true);
+            BindablePropertyUtility.GetBindableProperties(Provider.gameObject, _recordableProperties, recursive: true);
 
             _recordSnapshotValues.Clear();
             _recordCollection?.Dispose();
-            _recordCollection = PropertyBindingCollection.Bind(Provider.transform.root.gameObject, _recordableProperties);
+            _recordCollection = PropertyBindingCollection.Bind(Provider.gameObject, _recordableProperties);
             for (int i = 0; i < _recordableProperties.Count; i++)
             {
                 var property = _recordableProperties[i];
@@ -958,8 +954,7 @@ namespace TimboJimboEditor.Sequencer
             }
 
             _recordedEdits.Clear();
-            _editTracker = new UserEditTracker(filterOut: bp =>
-                bp.Target is SequenceProvider || !_recordSnapshotValues.ContainsKey(bp));
+            _editTracker = new UserEditTracker(filterOut: bp => bp.Target is SequenceProvider || !_recordSnapshotValues.ContainsKey(bp));
             _editTracker.StartDetecting(OnRecordedUserEdit);
             UpdatePreviewVisuals();
         }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using TimboJimbo.Core.Utility;
 using TimboJimbo.Sequencer;
 using TimboJimbo.Sequencer.Segments;
 using TimboJimboEditor.Sequencer.Blocks;
@@ -25,7 +26,7 @@ namespace TimboJimboEditor.Sequencer
             public void Draw(Rect previewRect)
             {
                 const float padding = 4f;
-                const float laneGap = 2f;
+                const float laneGap = 0f;
                 var verts = new Vector3[4];
                 
                 previewRect.x = previewRect.x + (padding);
@@ -140,7 +141,7 @@ namespace TimboJimboEditor.Sequencer
                 if (DrawSequenceRow(provider, i))
                     break;
 
-                EditorGUILayout.Space(EditorGUIUtility.standardVerticalSpacing * 2f);
+                EditorGUILayout.Space(EditorGUIUtility.standardVerticalSpacing );
             }
 
             serializedObject.ApplyModifiedProperties();
@@ -157,7 +158,7 @@ namespace TimboJimboEditor.Sequencer
             bool isMissing = sequence == null;
             bool isOpenInTimeline = !isMissing && SegmentTimelineWindow.IsSequenceContextOpen(provider, sequence.Name);
 
-            using (new EditorGUILayout.VerticalScope())
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
@@ -213,7 +214,6 @@ namespace TimboJimboEditor.Sequencer
                         }
                     }
                 }
-
                 DrawMiniTimelinePreview(sequence, isOpenInTimeline);
             }
 
@@ -228,15 +228,16 @@ namespace TimboJimboEditor.Sequencer
 
         private void DrawMiniTimelinePreview(Sequence sequence, bool isOpenInTimeline)
         {
-            if (!TryGetOrBuildCachedPreview(sequence, out var cachedPreview) || cachedPreview == null || cachedPreview.RectsToDraw.Count == 0)
+            if (!TryGetOrBuildCachedPreview(sequence, out var cachedPreview))
                 return;
 
             var previewRect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(50), GUILayout.ExpandWidth(true));
 
-            previewRect.xMin += 2f;
-            previewRect.xMax -= 2f;
-            
+            if(Event.current.type != EventType.Repaint)
+                return;
+
             EditorGUI.DrawRect(previewRect, new Color(0.122f, 0.122f, 0.122f, 0.75f));
+            
             cachedPreview.Draw(previewRect);
 
             if (isOpenInTimeline)
@@ -248,13 +249,12 @@ namespace TimboJimboEditor.Sequencer
                     CurrentlyEditingTextStyle = new GUIStyle(EditorStyles.label)
                     {
                         fontStyle = FontStyle.Italic,
-                        fontSize = 10,
-                        normal = { textColor = new Color(0.85f, 0.85f, 0.85f, 1f) },
+                        normal = { textColor = new Color(0.85f, 0.85f, 0.85f, 0.5f) },
                         alignment = TextAnchor.MiddleCenter,
                         clipping = TextClipping.Clip,
                     };
                 }
-                EditorGUI.LabelField(previewRect, "Editing...", CurrentlyEditingTextStyle);
+                EditorGUI.LabelField(previewRect, "Currently Editing", CurrentlyEditingTextStyle);
             }
         }
 
@@ -262,7 +262,7 @@ namespace TimboJimboEditor.Sequencer
         {
             preview = null;
 
-            if (sequence == null || sequence.Segments == null || sequence.Segments.Count == 0)
+            if (sequence == null || sequence.Segments == null)
                 return false;
 
             int signature = ComputeSequenceSignature(sequence);
@@ -314,7 +314,9 @@ namespace TimboJimboEditor.Sequencer
             
             //convert packed to normalized draw rects
             var maxEnd = packed.Count > 0 ? packed.Max(x => x.Item.End) : 0f;
+            const int minLanes = 4;
             var lanes = packed.Count > 0 ? packed.Max(x => x.Lane) + 1 : 1;
+            lanes = Mathf.Max(lanes, minLanes);
 
             foreach (var pair in packed)
             {
@@ -326,9 +328,15 @@ namespace TimboJimboEditor.Sequencer
                 float laneHeightPercent = (1f / lanes);
 
                 var normalizedRect = new Rect(leftPercent, topPercent, widthPercent, laneHeightPercent);
+
                 var editor = SegmentBlockEditorRegistry.GetEditor(entry.Segment);
                 var (fill, border) = editor.GetBlockColors(entry.Segment);
-
+                {
+                    ColorExtra.RGBToOkLCh(border, out float l, out float c, out float h);
+                    l *= 0.7f;
+                    border = ColorExtra.OkLChToRGB(l, c, h);
+                }
+                
                 cached.RectsToDraw.Add((normalizedRect, fill, border));
             }
 

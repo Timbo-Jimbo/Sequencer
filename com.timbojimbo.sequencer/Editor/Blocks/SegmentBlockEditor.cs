@@ -33,10 +33,12 @@ namespace TimboJimboEditor.Sequencer.Blocks
         };
         protected virtual int GetBlockColorSeed(Segment segment) => 0;
 
+        public static (Color fill, Color border) GetDefaultBlockColors() => (new Color(0.30f, 0.20f, 0.14f), new Color(0.58f, 0.40f, 0.28f));
+
         /// <summary>Return custom fill/border colours, or <c>default</c> to use built-in fallback.</summary>
         public virtual (Color fill, Color border) GetBlockColors(Segment segment)
         {
-            var (defaultFill, defaultBorder) = (new Color(0.30f, 0.20f, 0.14f), new Color(0.58f, 0.40f, 0.28f));
+            var (defaultFill, defaultBorder) = GetDefaultBlockColors();
 
             var seed = GetBlockColorSeed(segment);
             return (

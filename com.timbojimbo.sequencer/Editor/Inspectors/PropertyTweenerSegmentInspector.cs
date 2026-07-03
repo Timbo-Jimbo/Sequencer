@@ -18,10 +18,12 @@ namespace TimboJimboEditor.Sequencer.Segments
             var durationProp = property.FindPropertyRelative("Duration");
             var bindablePropertyProp = property.FindPropertyRelative("Property");
             var easeProp = property.FindPropertyRelative("Ease");
-            var startModeProp = property.FindPropertyRelative("StartMode");
-            var endModeProp = property.FindPropertyRelative("EndMode");
-            var startValueProp = property.FindPropertyRelative("StartValue");
-            var endValueProp = property.FindPropertyRelative("EndValue");
+            var startProp = property.FindPropertyRelative("Start");
+            var endProp = property.FindPropertyRelative("End");
+            var startModeProp = startProp.FindPropertyRelative("Mode");
+            var startValueProp = startProp.FindPropertyRelative("Value");
+            var endModeProp = endProp.FindPropertyRelative("Mode");
+            var endValueProp = endProp.FindPropertyRelative("Value");
             var interpolationProp = property.FindPropertyRelative("Interpolation");
             var discreteValueSelectionProp = property.FindPropertyRelative("DiscreteValueSelection");
             var propertyKindProp = bindablePropertyProp.FindPropertyRelative("_kind");
@@ -35,7 +37,7 @@ namespace TimboJimboEditor.Sequencer.Segments
             EditorGUILayout.PropertyField(easeProp);
             GUILayout.Space(8);
 
-            EditorGUILayout.PropertyField(startModeProp);
+            EditorGUILayout.PropertyField(startModeProp, new GUIContent("Start Mode"));
 
             var shouldDrawStartValue = startModeProp.hasMultipleDifferentValues ||
                                        startModeProp.enumValueIndex != (int)EasedStartMode.StartFromCurrent;
@@ -50,7 +52,7 @@ namespace TimboJimboEditor.Sequencer.Segments
                 }
             }
 
-            EditorGUILayout.PropertyField(endModeProp);
+            EditorGUILayout.PropertyField(endModeProp, new GUIContent("End Mode"));
             var shouldDrawEndValue = endModeProp.hasMultipleDifferentValues ||
                                      endModeProp.enumValueIndex != (int)EasedEndMode.EndAtInitial;
             if (shouldDrawEndValue)

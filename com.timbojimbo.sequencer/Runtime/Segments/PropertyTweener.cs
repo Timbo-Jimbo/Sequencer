@@ -5,8 +5,6 @@ using TimboJimbo.Core;
 using TimboJimbo.PropertyBindings;
 using TimboJimbo.Sequencer.Builder;
 using UnityEngine;
-using UnityEngine.Assertions;
-using UnityEngine.Events;
 
 namespace TimboJimbo.Sequencer.Segments
 {
@@ -24,17 +22,12 @@ namespace TimboJimbo.Sequencer.Segments
     }
 
     [Serializable]
-    public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigurable, IPlaybackBuilder, ISerializationCallbackReceiver
+    public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigurable, IPlaybackBuilder
     {
         public float StartTime;
         public float Duration;
         public BindableProperty Property;
         public EaseType Ease = EaseType.Linear;
-        public EasedStartMode StartMode = EasedStartMode.StartFromCurrent;
-        public EasedEndMode EndMode = EasedEndMode.EndAtAbsolute;
-        public ValueContainer StartValue;
-        public ValueContainer EndValue;
-        public bool Migrated = false;
         public TweenStart<ValueContainer> Start = TweenStart.Current<ValueContainer>();
         public TweenEnd<ValueContainer> End = TweenEnd.Initial<ValueContainer>();
         public InterpolationConfig Interpolation;
@@ -79,20 +72,6 @@ namespace TimboJimbo.Sequencer.Segments
                 Interpolation = Interpolation,
                 DiscreteValueSelection = DiscreteValueSelection
             };
-        }
-
-        public void OnBeforeSerialize()
-        {
-        }
-
-        public void OnAfterDeserialize()
-        {
-            if (!Migrated)
-            {
-                Start = new TweenStart<ValueContainer> { Value = StartValue, Mode = StartMode };
-                End = new TweenEnd<ValueContainer> { Value = EndValue, Mode = EndMode };
-                Migrated = true;
-            }
         }
 
         public class Playback : SegmentPlayback
@@ -204,6 +183,7 @@ namespace TimboJimbo.Sequencer.Segments
         }
     }
     
+    [Serializable]
     public struct TweenStart<T>
     {
         public T Value;
@@ -219,6 +199,7 @@ namespace TimboJimbo.Sequencer.Segments
     }
 
 
+    [Serializable]
     public struct TweenEnd<T>
     {
         public T Value;
@@ -251,12 +232,10 @@ namespace TimboJimbo.Sequencer.Segments
             return new PropertyTweener
             {
                 Property = BindableProperty.CreateThreeComponent(target, "m_LocalPosition", ValueKind.Vector3, "x", "y", "z"),
-                StartValue = ValueContainer.FromVector3(start.Value),
-                EndValue = ValueContainer.FromVector3(end.Value),
+                Start = new TweenStart<ValueContainer> { Value = ValueContainer.FromVector3(start.Value), Mode = start.Mode },
+                End = new TweenEnd<ValueContainer> { Value = ValueContainer.FromVector3(end.Value), Mode = end.Mode },
                 Duration = duration,
                 Ease = ease,
-                StartMode = start.Mode,
-                EndMode = end.Mode,
                 Interpolation = new InterpolationConfig { Vector3 = interpolationMode }
             };
         }
@@ -274,12 +253,10 @@ namespace TimboJimbo.Sequencer.Segments
             return new PropertyTweener
             {
                 Property = BindableProperty.CreateThreeComponent(target, "m_LocalScale", ValueKind.Vector3, "x", "y", "z"),
-                StartValue = ValueContainer.FromVector3(start.Value),
-                EndValue = ValueContainer.FromVector3(end.Value),
+                Start = new TweenStart<ValueContainer> { Value = ValueContainer.FromVector3(start.Value), Mode = start.Mode },
+                End = new TweenEnd<ValueContainer> { Value = ValueContainer.FromVector3(end.Value), Mode = end.Mode },
                 Duration = duration,
                 Ease = ease,
-                StartMode = start.Mode,
-                EndMode = end.Mode,
                 Interpolation = new InterpolationConfig { Vector3 = interpolationMode }
             };
         }
@@ -297,12 +274,10 @@ namespace TimboJimbo.Sequencer.Segments
             return new PropertyTweener
             {
                 Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
-                StartValue = ValueContainer.FromQuaternion(start.Value),
-                EndValue = ValueContainer.FromQuaternion(end.Value),
+                Start = new TweenStart<ValueContainer> { Value = ValueContainer.FromQuaternion(start.Value), Mode = start.Mode },
+                End = new TweenEnd<ValueContainer> { Value = ValueContainer.FromQuaternion(end.Value), Mode = end.Mode },
                 Duration = duration,
                 Ease = ease,
-                StartMode = start.Mode,
-                EndMode = end.Mode,
                 Interpolation = new InterpolationConfig { Rotation = interpolationMode }
             };
         }
@@ -320,12 +295,10 @@ namespace TimboJimbo.Sequencer.Segments
             return new PropertyTweener
             {
                 Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
-                StartValue = ValueContainer.FromQuaternion(Quaternion.Euler(start.Value)),
-                EndValue = ValueContainer.FromQuaternion(Quaternion.Euler(end.Value)),
+                Start = new TweenStart<ValueContainer> { Value = ValueContainer.FromQuaternion(Quaternion.Euler(start.Value)), Mode = start.Mode },
+                End = new TweenEnd<ValueContainer> { Value = ValueContainer.FromQuaternion(Quaternion.Euler(end.Value)), Mode = end.Mode },
                 Duration = duration,
                 Ease = ease,
-                StartMode = start.Mode,
-                EndMode = end.Mode,
                 Interpolation = new InterpolationConfig { Rotation = interpolationMode }
             };
         }

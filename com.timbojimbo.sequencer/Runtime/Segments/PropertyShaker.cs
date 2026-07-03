@@ -1,11 +1,8 @@
 using System;
 using System.Collections.Generic;
 using JetBrains.Annotations;
-using TimboJimbo.Core;
 using TimboJimbo.PropertyBindings;
-using TimboJimbo.Sequencer.Builder;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 namespace TimboJimbo.Sequencer.Segments
 {

@@ -27,7 +27,7 @@ namespace TimboJimboEditor.Sequencer.Recorders
         public override void Consume(Segment segment, BindableProperty property, ValueContainer value, float time)
         {
             if (segment is PropertyTweener tweener)
-                tweener.EndValue = value;
+                tweener.End.Value = value;
         }
 
         public override bool CanCreateFor(BindableProperty property)
@@ -43,10 +43,8 @@ namespace TimboJimboEditor.Sequencer.Recorders
                 StartTime = time - duration,
                 Duration = duration,
                 Property = property,
-                StartMode = EasedStartMode.StartFromCurrent,
-                StartValue = unmodifiedValue,
-                EndMode = EasedEndMode.EndAtAbsolute,
-                EndValue = value
+                Start = new TweenStart<ValueContainer> { Value = unmodifiedValue, Mode = EasedStartMode.StartFromCurrent },
+                End = new TweenEnd<ValueContainer> { Value = value, Mode = EasedEndMode.EndAtAbsolute }
             };
         }
     }

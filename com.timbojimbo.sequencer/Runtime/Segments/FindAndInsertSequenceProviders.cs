@@ -193,7 +193,7 @@ namespace TimboJimbo.Sequencer.Segments
     public static class FindAndInsertSequenceProvidersExtensions
     {
         public static Segment FindAndPlay(
-            this SegMake _,
+            this SeqMake _,
             SequenceSearchParams searchFor,
             float staggerBy = 0f,
             SequenceSearchParams exclude = default,

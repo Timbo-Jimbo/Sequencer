@@ -24,7 +24,7 @@ namespace TimboJimbo.Sequencer.Segments
     }
 
     [Serializable]
-    public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigurable, IPlaybackBuilder
+    public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigurable, IPlaybackBuilder, ISerializationCallbackReceiver
     {
         public float StartTime;
         public float Duration;
@@ -34,6 +34,9 @@ namespace TimboJimbo.Sequencer.Segments
         public EasedEndMode EndMode = EasedEndMode.EndAtAbsolute;
         public ValueContainer StartValue;
         public ValueContainer EndValue;
+        public bool Migrated = false;
+        public TweenStart<ValueContainer> Start = TweenStart.Current<ValueContainer>();
+        public TweenEnd<ValueContainer> End = TweenEnd.Initial<ValueContainer>();
         public InterpolationConfig Interpolation;
         public DiscreteValueSelectionMode DiscreteValueSelection = DiscreteValueSelectionMode.Nearest;
 
@@ -71,13 +74,25 @@ namespace TimboJimbo.Sequencer.Segments
                 BindingCollection = context.PropertyBindings,
                 Property = Property,
                 Ease = Ease,
-                StartMode = StartMode,
-                EndMode = EndMode,
-                StartValue = StartValue,
-                EndValue = EndValue,
+                Start = Start,
+                End = End,
                 Interpolation = Interpolation,
                 DiscreteValueSelection = DiscreteValueSelection
             };
+        }
+
+        public void OnBeforeSerialize()
+        {
+        }
+
+        public void OnAfterDeserialize()
+        {
+            if (!Migrated)
+            {
+                Start = new TweenStart<ValueContainer> { Value = StartValue, Mode = StartMode };
+                End = new TweenEnd<ValueContainer> { Value = EndValue, Mode = EndMode };
+                Migrated = true;
+            }
         }
 
         public class Playback : SegmentPlayback
@@ -85,10 +100,8 @@ namespace TimboJimbo.Sequencer.Segments
             public PropertyBindingCollection BindingCollection;
             public BindableProperty Property;
             public EaseType Ease;
-            public EasedStartMode StartMode;
-            public EasedEndMode EndMode;
-            public ValueContainer StartValue;
-            public ValueContainer EndValue;
+            public TweenStart<ValueContainer> Start = TweenStart.Current<ValueContainer>();
+            public TweenEnd<ValueContainer> End = TweenEnd.Initial<ValueContainer>();
             public InterpolationConfig Interpolation;
             public DiscreteValueSelectionMode DiscreteValueSelection;
 
@@ -103,18 +116,18 @@ namespace TimboJimbo.Sequencer.Segments
 
             public override void Setup(in PlaybackSetupContext context)
             {
-                if (EndMode == EasedEndMode.EndAtInitial)
+                if (End.Mode == EasedEndMode.EndAtInitial)
                 {
                     var readResult = BindingCollection.TryRead(Property, out var readValue);
-                    _endValue = readResult ? readValue : EndValue;
+                    _endValue = readResult ? readValue : End.Value;
                     _endValueInitialized = true;
                 }
 
-                if(StartMode == EasedStartMode.StartFromAbsolute)
+                if(Start.Mode == EasedStartMode.StartFromAbsolute)
                 {
                     //are we the first segment to write to this property?
                     SegmentPlayback earliestPlayback = null;
-                    foreach (var playback in context.Sequence.AllPlaybacks)
+                    foreach (var playback in context.Playbacks)
                     {
                         if (
                             playback is Playback p && 
@@ -130,7 +143,7 @@ namespace TimboJimbo.Sequencer.Segments
                     {
                         // if so, we need to ensure the start value is correct from the outset
                         //otherwise we will get a pop at the start of this segment.
-                        BindingCollection.TryWrite(Property, StartValue);
+                        BindingCollection.TryWrite(Property, Start.Value);
                     }
                 }
             }
@@ -139,14 +152,14 @@ namespace TimboJimbo.Sequencer.Segments
             {
                 if (!_startValueInitialized)
                 {
-                    switch (StartMode)
+                    switch (Start.Mode)
                     {
                         case EasedStartMode.StartFromAbsolute:
-                            _startValue = StartValue;
+                            _startValue = Start.Value;
                             break;
                         case EasedStartMode.StartFromCurrent:
                             var readSuccess = BindingCollection.TryRead(Property, out var readValue);
-                            _startValue = readSuccess ? readValue : StartValue;
+                            _startValue = readSuccess ? readValue : Start.Value;
                             break;
                     }
 
@@ -155,16 +168,16 @@ namespace TimboJimbo.Sequencer.Segments
 
                 if (!_endValueInitialized)
                 {
-                    switch (EndMode)
+                    switch (End.Mode)
                     {
                         case EasedEndMode.EndAtAbsolute:
-                            _endValue = EndValue;
+                            _endValue = End.Value;
                             break;
                         case EasedEndMode.EndAtRelative:
-                            _endValue = ValueContainer.Add(_startValue, EndValue);
+                            _endValue = ValueContainer.Add(_startValue, End.Value);
                             break;
                         default:
-                            throw new NotImplementedException($"EndMode {EndMode} not implemented");
+                            throw new NotImplementedException($"EndMode {End.Mode} not implemented");
                     }
 
                     _endValueInitialized = true;
@@ -190,47 +203,43 @@ namespace TimboJimbo.Sequencer.Segments
             }
         }
     }
+    
     public struct TweenStart<T>
     {
         public T Value;
-        public EasedStartMode StartMode;
+        public EasedStartMode Mode;
     }
 
     public static class TweenStart
     {
-        public static TweenStart<T> Absolute<T>(T from) => new TweenStart<T> { Value = from, StartMode = EasedStartMode.StartFromAbsolute };
-        public static TweenStart<Vector2> Absolute(float x, float y) => new TweenStart<Vector2> { Value = new Vector2(x, y), StartMode = EasedStartMode.StartFromAbsolute };
-        public static TweenStart<Vector3> Absolute(float x, float y, float z) => new TweenStart<Vector3> { Value = new Vector3(x, y, z), StartMode = EasedStartMode.StartFromAbsolute };
-        public static TweenStart<T> Current<T>() => new TweenStart<T> { Value = default, StartMode = EasedStartMode.StartFromCurrent };
+        public static TweenStart<T> Absolute<T>(T from) => new TweenStart<T> { Value = from, Mode = EasedStartMode.StartFromAbsolute };
+        public static TweenStart<Vector2> Absolute(float x, float y) => new TweenStart<Vector2> { Value = new Vector2(x, y), Mode = EasedStartMode.StartFromAbsolute };
+        public static TweenStart<Vector3> Absolute(float x, float y, float z) => new TweenStart<Vector3> { Value = new Vector3(x, y, z), Mode = EasedStartMode.StartFromAbsolute };
+        public static TweenStart<T> Current<T>() => new TweenStart<T> { Value = default, Mode = EasedStartMode.StartFromCurrent };
     }
 
 
     public struct TweenEnd<T>
     {
         public T Value;
-        public EasedEndMode EndMode;
+        public EasedEndMode Mode;
     }
 
     public static class TweenEnd
     {
-        public static TweenEnd<T> Absolute<T>(T to) => new TweenEnd<T> { Value = to, EndMode = EasedEndMode.EndAtAbsolute };
-        public static TweenEnd<Vector2> Absolute(float x, float y) => new TweenEnd<Vector2> { Value = new Vector2(x, y), EndMode = EasedEndMode.EndAtAbsolute };
-        public static TweenEnd<Vector3> Absolute(float x, float y, float z) => new TweenEnd<Vector3> { Value = new Vector3(x, y, z), EndMode = EasedEndMode.EndAtAbsolute };
-        public static TweenEnd<T> Relative<T>(T to) => new TweenEnd<T> { Value = to, EndMode = EasedEndMode.EndAtRelative };
-        public static TweenEnd<Vector2> Relative(float x, float y) => new TweenEnd<Vector2> { Value = new Vector2(x, y), EndMode = EasedEndMode.EndAtRelative };
-        public static TweenEnd<Vector3> Relative(float x, float y, float z) => new TweenEnd<Vector3> { Value = new Vector3(x, y, z), EndMode = EasedEndMode.EndAtRelative };
-        public static TweenEnd<T> Initial<T>() => new TweenEnd<T> { Value = default, EndMode = EasedEndMode.EndAtInitial };
-    }
-
-    public struct TweenGroup
-    {
-        public GameObject BindingRoot;
+        public static TweenEnd<T> Absolute<T>(T to) => new TweenEnd<T> { Value = to, Mode = EasedEndMode.EndAtAbsolute };
+        public static TweenEnd<Vector2> Absolute(float x, float y) => new TweenEnd<Vector2> { Value = new Vector2(x, y), Mode = EasedEndMode.EndAtAbsolute };
+        public static TweenEnd<Vector3> Absolute(float x, float y, float z) => new TweenEnd<Vector3> { Value = new Vector3(x, y, z), Mode = EasedEndMode.EndAtAbsolute };
+        public static TweenEnd<T> Relative<T>(T to) => new TweenEnd<T> { Value = to, Mode = EasedEndMode.EndAtRelative };
+        public static TweenEnd<Vector2> Relative(float x, float y) => new TweenEnd<Vector2> { Value = new Vector2(x, y), Mode = EasedEndMode.EndAtRelative };
+        public static TweenEnd<Vector3> Relative(float x, float y, float z) => new TweenEnd<Vector3> { Value = new Vector3(x, y, z), Mode = EasedEndMode.EndAtRelative };
+        public static TweenEnd<T> Initial<T>() => new TweenEnd<T> { Value = default, Mode = EasedEndMode.EndAtInitial };
     }
 
     public static class PropertyTweenerExtensions
     {
-        public static PropertyTweener Position(
-            this SegMake _,
+        public static PropertyTweener TweenPosition(
+            this SeqMake _,
             Transform target, 
             TweenStart<Vector3> start,
             TweenEnd<Vector3> end,
@@ -246,14 +255,14 @@ namespace TimboJimbo.Sequencer.Segments
                 EndValue = ValueContainer.FromVector3(end.Value),
                 Duration = duration,
                 Ease = ease,
-                StartMode = start.StartMode,
-                EndMode = end.EndMode,
+                StartMode = start.Mode,
+                EndMode = end.Mode,
                 Interpolation = new InterpolationConfig { Vector3 = interpolationMode }
             };
         }
 
-        public static PropertyTweener Scale(
-            this SegMake _,
+        public static PropertyTweener TweenScale(
+            this SeqMake _,
             Transform target, 
             TweenStart<Vector3> start,
             TweenEnd<Vector3> end,
@@ -269,14 +278,14 @@ namespace TimboJimbo.Sequencer.Segments
                 EndValue = ValueContainer.FromVector3(end.Value),
                 Duration = duration,
                 Ease = ease,
-                StartMode = start.StartMode,
-                EndMode = end.EndMode,
+                StartMode = start.Mode,
+                EndMode = end.Mode,
                 Interpolation = new InterpolationConfig { Vector3 = interpolationMode }
             };
         }
 
-        public static PropertyTweener Rotation(
-            this SegMake _,
+        public static PropertyTweener TweenRotation(
+            this SeqMake _,
             Transform target, 
             TweenStart<Quaternion> start,
             TweenEnd<Quaternion> end,
@@ -292,14 +301,14 @@ namespace TimboJimbo.Sequencer.Segments
                 EndValue = ValueContainer.FromQuaternion(end.Value),
                 Duration = duration,
                 Ease = ease,
-                StartMode = start.StartMode,
-                EndMode = end.EndMode,
+                StartMode = start.Mode,
+                EndMode = end.Mode,
                 Interpolation = new InterpolationConfig { Rotation = interpolationMode }
             };
         }
 
-        public static PropertyTweener EulerRotation(
-            this SegMake _,
+        public static PropertyTweener TweenEulerRotation(
+            this SeqMake _,
             Transform target, 
             TweenStart<Vector3> start,
             TweenEnd<Vector3> end,
@@ -315,8 +324,8 @@ namespace TimboJimbo.Sequencer.Segments
                 EndValue = ValueContainer.FromQuaternion(Quaternion.Euler(end.Value)),
                 Duration = duration,
                 Ease = ease,
-                StartMode = start.StartMode,
-                EndMode = end.EndMode,
+                StartMode = start.Mode,
+                EndMode = end.Mode,
                 Interpolation = new InterpolationConfig { Rotation = interpolationMode }
             };
         }

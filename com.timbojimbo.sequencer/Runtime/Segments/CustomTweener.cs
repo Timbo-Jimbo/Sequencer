@@ -102,7 +102,7 @@ namespace TimboJimbo.Sequencer.Segments
     public static class CustomerTweenerExtensions
     {
         public static CustomTweener TweenCustom(
-            this SegMake _, 
+            this SeqMake _, 
             UnityAction<float> onSample = null, 
             float duration = 1f, 
             EaseType ease = EaseType.Linear
@@ -122,7 +122,7 @@ namespace TimboJimbo.Sequencer.Segments
         }
 
         public static CustomTweener TweenCustom(
-            this SegMake _, 
+            this SeqMake _, 
             UnityAction<float, CustomTweenerSampleContext> onSampleWithContext = null, 
             float duration = 1f, 
             EaseType ease = EaseType.Linear

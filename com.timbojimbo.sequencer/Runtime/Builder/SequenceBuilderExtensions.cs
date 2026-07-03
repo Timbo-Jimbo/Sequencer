@@ -6,7 +6,7 @@ using TimboJimbo.Sequencer.Builder;
 public static class SequenceBuilderExtensions
 {
     public static Segment If(
-        this SegSchedule _,
+        this SeqSchedule _,
         bool isTrue, 
         Segment then, 
         Segment otherwise = null
@@ -18,7 +18,7 @@ public static class SequenceBuilderExtensions
     };
 
     public static Segment If(
-        this SegSchedule _,
+        this SeqSchedule _,
         Func<bool> isTrue, 
         Segment then, 
         Segment otherwise = null
@@ -30,7 +30,7 @@ public static class SequenceBuilderExtensions
     };
     
     public static Segment Wait(
-        this SegSchedule _,
+        this SeqSchedule _,
         float seconds, 
         Segment then
     ) => CustomArrangement(
@@ -40,7 +40,7 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment CustomArrangement(
-        this SegSchedule _,
+        this SeqSchedule _,
         Func<ArrangementContext, float> calculateAbsoluteStart,
         Segment s1,
         Segment s2,
@@ -64,7 +64,7 @@ public static class SequenceBuilderExtensions
     }
 
     public static Segment CustomArrangement(
-        this SegSchedule _,
+        this SeqSchedule _,
         Func<ArrangementContext, float> calculateAbsoluteStart,
         IEnumerable<Segment> segments
     )
@@ -83,13 +83,13 @@ public static class SequenceBuilderExtensions
     }
 
     public static Segment CustomArrangement(
-        this SegSchedule _,
+        this SeqSchedule _,
         Func<ArrangementContext, float> calculateAbsoluteStart,
         params Segment[] segments
     ) => CustomArrangement(_, calculateAbsoluteStart, (IEnumerable<Segment>)segments);
 
     public static Segment OneAfterAnother(
-        this SegSchedule _,
+        this SeqSchedule _,
         Segment s1, 
         Segment s2, 
         Segment s3 = null, 
@@ -106,7 +106,7 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment OneAfterAnother(
-        this SegSchedule _,
+        this SeqSchedule _,
         IEnumerable<Segment> segments
     ) => CustomArrangement(
         _,
@@ -115,12 +115,12 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment OneAfterAnother(
-        this SegSchedule _,
+        this SeqSchedule _,
         params Segment[] segments
     ) => OneAfterAnother(_, (IEnumerable<Segment>)segments);
 
     public static Segment Together(
-        this SegSchedule _,
+        this SeqSchedule _,
         Segment s1, 
         Segment s2, 
         Segment s3 = null, 
@@ -137,7 +137,7 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment Together(
-        this SegSchedule _,
+        this SeqSchedule _,
         IEnumerable<Segment> segments
     ) => CustomArrangement(
         _,
@@ -146,12 +146,12 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment Together(
-        this SegSchedule _,
+        this SeqSchedule _,
         params Segment[] segments
     ) => Together(_, (IEnumerable<Segment>)segments);
 
     public static Segment Stagger(
-        this SegSchedule _,
+        this SeqSchedule _,
         float seconds,
         Segment s1,
         Segment s2,
@@ -169,7 +169,7 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment Stagger(
-        this SegSchedule _,
+        this SeqSchedule _,
         float seconds,
         IEnumerable<Segment> segments
     ) => CustomArrangement(
@@ -179,13 +179,13 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment Stagger(
-        this SegSchedule _,
+        this SeqSchedule _,
         float seconds,
         params Segment[] segments
     ) => Stagger(_, seconds, (IEnumerable<Segment>)segments);
 
     public static Segment ProportionalStagger(
-        this SegSchedule _,
+        this SeqSchedule _,
         Segment s1,
         Segment s2,
         Segment s3 = null,
@@ -205,7 +205,7 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment ProportionalStagger(
-        this SegSchedule _,
+        this SeqSchedule _,
         IEnumerable<Segment> segments,
         float percent01 = 0.5f
     ) => CustomArrangement(
@@ -217,7 +217,7 @@ public static class SequenceBuilderExtensions
     );
 
     public static Segment ProportionalStagger(
-        this SegSchedule _,
+        this SeqSchedule _,
         float percent01,
         params Segment[] segments
     ) => ProportionalStagger(_, segments, percent01);

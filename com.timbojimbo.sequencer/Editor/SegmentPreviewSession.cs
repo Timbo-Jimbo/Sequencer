@@ -9,7 +9,7 @@ namespace TimboJimboEditor.Sequencer
     {
         public SequenceProvider Provider { get; }
         public string SequenceName { get; }
-        public SequenceInstance Instance { get; private set; }
+        public SequencePlayer Instance { get; private set; }
         public float Time { get; private set; }
         public float Duration => Instance != null ? Instance.Duration : 0f;
         public bool IsDisposed { get; private set; }
@@ -48,9 +48,9 @@ namespace TimboJimboEditor.Sequencer
             if (Provider == null)
                 return;
 
-            Instance = Provider.CreateInstance(SequenceName, PlaybackRange, isPreview: true);
+            Instance = Provider.CreatePlayer(SequenceName, PlaybackRange, isPreview: true);
             Time = Mathf.Clamp(preservedTime, 0f, Duration);
-            Instance.Scrub(Time);
+            Instance.Seek(Time);
             Rebuilt?.Invoke();
             SceneView.RepaintAll();
         }
@@ -72,7 +72,7 @@ namespace TimboJimboEditor.Sequencer
                 return;
 
             Time = Mathf.Clamp(time, 0f, Duration);
-            Instance.Scrub(Time);
+            Instance.Seek(Time);
             SceneView.RepaintAll();
         }
 

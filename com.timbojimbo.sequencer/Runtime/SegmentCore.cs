@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using JetBrains.Annotations;
 using TimboJimbo.PropertyBindings;
-using UnityEngine;
-
 namespace TimboJimbo.Sequencer
 {
     public class SegmentPlan

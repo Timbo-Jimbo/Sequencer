@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TimboJimbo.PropertyBindings;
 using UnityEngine;
 
@@ -25,19 +26,21 @@ namespace TimboJimbo.Sequencer
 
     public readonly struct PlaybackSetupContext
     {
-        public readonly SequenceInstance Sequence;
+        public readonly SequencePlayer Sequence;
+        public readonly IReadOnlyList<SegmentPlayback> Playbacks;
         public readonly bool IsPreview;
 
-        public PlaybackSetupContext(SequenceInstance sequence, bool isPreview)
+        public PlaybackSetupContext(SequencePlayer sequence, IReadOnlyList<SegmentPlayback> playbacks, bool isPreview)
         {
             Sequence = sequence;
+            Playbacks = playbacks;
             IsPreview = isPreview;
         }
     }
 
     public readonly struct PlaybackBoundaryContext
     {
-        public readonly SequenceInstance Sequence;
+        public readonly SequencePlayer Sequence;
         public readonly float Playhead;
         public readonly SegmentEvaluationMode EvaluationMode;
         public readonly bool IsPreview;
@@ -46,7 +49,7 @@ namespace TimboJimbo.Sequencer
         public bool IsJump => EvaluationMode == SegmentEvaluationMode.Scrub;
 
         public PlaybackBoundaryContext(
-            SequenceInstance sequence,
+            SequencePlayer sequence,
             float playhead,
             SegmentEvaluationMode evaluationMode,
             bool isPreview)
@@ -60,7 +63,7 @@ namespace TimboJimbo.Sequencer
 
     public readonly struct PlaybackSampleContext
     {
-        public readonly SequenceInstance Sequence;
+        public readonly SequencePlayer Sequence;
         public readonly float Playhead;
         public readonly float LocalTime;
         public readonly float Duration;
@@ -75,7 +78,7 @@ namespace TimboJimbo.Sequencer
         public float AbsoluteTime => Playhead;
 
         public PlaybackSampleContext(
-            SequenceInstance sequence,
+            SequencePlayer sequence,
             float playhead,
             float localTime,
             float duration,

@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using UnityEditor;
 using TimboJimbo.Sequencer;
+using TimboJimboEditor.Sequencer.Blocks;
+using TimboJimboEditor.Sequencer.DragDrop;
 using UnityEngine;
 using UnityEngine.Pool;
 using UnityEngine.UIElements;
@@ -13,7 +16,10 @@ namespace TimboJimboEditor.Sequencer
         private enum MarqueeMode { Replace, Additive, Subtractive }
 
         private const float RulerHeight = 24f;
-        private const float LaneTop = RulerHeight + 8f;
+        private const float MarkerLaneTop = RulerHeight + 2f;
+        private const float MarkerLaneHeight = 24f;
+        private const float MarkerLaneGap = 4f;
+        private const float LaneTop = MarkerLaneTop + MarkerLaneHeight + MarkerLaneGap;
         private const float LaneHeight = 48f;
         private const float LaneGap = 6f;
         private const float HorizontalPadding = 12f;
@@ -22,62 +28,77 @@ namespace TimboJimboEditor.Sequencer
         private const float MaxZoom = 1600f;
         private const float ResizeHandlePx = 8f;
         private const float OutlinePadding = 1f;
-        private const int SnapDepth = 2;
         private const float SnapThresholdPx = 20f;
         private const float TransformDragThresholdPx = 8f;
+        private const float PlaybackRangeHandlePx = 8f;
+        private const float MinPlaybackRangeDuration = 0.01f;
 
         private static readonly Color PreviewAccent = new Color(0.173f, 0.471f, 0.922f, 1.000f);
 
         private enum DragKind { None, ResizeLeft, ResizeRight, Move }
+        private enum PointerSessionMode { BackgroundPress, BlockPress, SelectionPress, Marquee, Transform, TransformSmear, Scrub, Pan, PlaybackRangeStartDrag, PlaybackRangeEndDrag, PlaybackRangeMoveDrag }
 
-        public Action<IReadOnlyList<SegmentPlan>> SelectionChanged;
-        public Action<SegmentPlan, float, float> TimeAdjustmentCommitted;
-        public Action<IReadOnlyList<SegmentPlan>> DeleteRequested;
+        public Action<IReadOnlyList<SegmentSelectionModel>> SelectionChanged;
+        public Action<IReadOnlyList<(SegmentSelectionModel model, float start, float duration)>> TimeAdjustmentCommitted;
+        public Action<IReadOnlyList<SegmentSelectionModel>> DeleteRequested;
+        public Action<IReadOnlyList<SegmentSelectionModel>, Converters.SegmentConverter> ConvertRequested;
         public Action<Type, float> AddRequested;
+        public Action<Segment> DropSegmentRequested;
         public Action<float> SeekRequested;
+        public Action<float, float> PlaybackRangeChanged;
+        public Action PlaybackRangeResetRequested;
+        public Action<float, float> PlaybackRangeGhostChanged;
+        public Action PlaybackRangeGhostEnded;
         public Action CopyRequested;
         public Action PasteRequested;
+        public Action StackSelectionRequested;
+        public Action AlignSelectionStartsRequested;
+        public Action AlignSelectionEndsRequested;
         public bool Snap = false;
-        public IReadOnlyList<SegmentPlan> SelectedPlans => _selection.ActiveSelection;
+        public IReadOnlyList<SegmentSelectionModel> SelectedModels => _selection.EffectiveSelection;
 
         private readonly List<PlanBlock> _blocks = new();
-        private readonly List<SegmentPlan> _activeLayer = new();
+        private readonly List<ZeroDurationMarker> _markers = new();
+        private readonly List<SegmentSelectionModel> _models = new();
         private readonly SelectionState _selection = new();
         private readonly List<SegmentSnapCandidate> _segmentSnapCandidates = new();
         private readonly List<Label> _rulerLabels = new();
         private readonly VisualElement _contentRoot;
         private readonly VisualElement _playhead;
+        private readonly VisualElement _playbackRangeBand;
+        private readonly VisualElement _playbackRangeStartHandle;
+        private readonly VisualElement _playbackRangeEndHandle;
+        private readonly VisualElement _playbackRangeGhostBand;
+        private readonly VisualElement _playbackRangeGhostStartHandle;
+        private readonly VisualElement _playbackRangeGhostEndHandle;
         private readonly VisualElement _snapGuide;
         private readonly VisualElement _selectionOutline;
         private readonly VisualElement _marqueeBox;
+        private readonly VisualElement _dragDropDraftPreview;
 
-        private SegmentPlan _activeRoot;
         private float _time;
         private bool _previewActive;
         private float _pixelsPerSecond = 120f;
         private float _viewStart;
         private bool _viewWasEverFramed;
-        private bool _panning;
-        private Vector2 _panStartPointer;
-        private float _panStartView;
+        private float _playbackRangeStart;
+        private float _playbackRangeEnd = 1f;
+        private bool _showPlaybackRange;
+        private bool _showPlaybackRangeGhost;
+        private float _playbackRangeGhostStart;
+        private float _playbackRangeGhostEnd;
+        private Segment _dragDropDraftSegment;
+        private float _dragDropDraftStart;
+        private float _dragDropDraftDuration;
+        private int _dragDropDraftLane;
+        private SequenceProvider _dropTargetProvider;
+        private string _dropTargetSequenceName;
 
         private SelectionTransformOperation _selectionTransform;
-
-        private bool _scrubbingTimeline;
-        private int _scrubPointerId = -1;
-        private bool _marqueeArmed;
-        private bool _marqueeSelecting;
-        private int _marqueePointerId = -1;
-        private Vector2 _marqueeStartLocal;
-        private MarqueeMode _marqueeMode;
-        private PlanBlock _pendingSelectedClickBlock;
-        private int _pendingSelectedClickPointerId = -1;
-        private bool _pendingSelectedClickShift;
-        private bool _pendingSelectedClickAction;
-        private bool _selectionTransformArmed;
-        private int _selectionTransformArmPointerId = -1;
-        private Vector2 _selectionTransformArmStartWorld;
-        private bool IsDraggingSelection => _selectionTransform != null;
+        private PointerSession _pointerSession;
+        private bool IsDraggingSelection =>
+            _selectionTransform != null &&
+            (_pointerSession?.Mode == PointerSessionMode.Transform || _pointerSession?.Mode == PointerSessionMode.TransformSmear);
 
         private readonly struct SegmentSnapCandidate
         {
@@ -89,7 +110,7 @@ namespace TimboJimboEditor.Sequencer
             }
         }
 
-        private sealed class SkipTransitionsScope : System.IDisposable
+        private sealed class SkipTransitionsScope : IDisposable
         {
             private Dictionary<VisualElement, CachedTransitions> _cache;
 
@@ -169,128 +190,145 @@ namespace TimboJimboEditor.Sequencer
 
         private sealed class PlanBlock
         {
-            public SegmentPlan Plan;
+            public SegmentSelectionModel Model;
             public VisualElement SelectionHighlight;
             public VisualElement Root;
             public Rect LayoutRect;
         }
 
+        private sealed class ZeroDurationMarker
+        {
+            public SegmentSelectionModel Model;
+            public VisualElement Root;
+            public VisualElement SelectionHighlight;
+            public Rect LayoutRect;
+            public int ColumnIndex;  // Position in time-based grouping
+            public int ColumnCount;  // Total markers at this time
+        }
+
+        private sealed class PointerSession
+        {
+            public PointerSessionMode Mode;
+            public int PointerId;
+            public Vector2 PointerStartWorld;
+            public Vector2 PointerStartLocal;
+            public Vector2 PanStartPointer;
+            public float PanStartView;
+            public float RangeStartAtPress;
+            public float RangeEndAtPress;
+            public PlanBlock PressedBlock;
+            public bool Shift;
+            public bool Action;
+            public bool BlockWasSelected;
+            public MarqueeMode MarqueeMode;
+        }
+
         private sealed class SelectionState
         {
-            private readonly List<SegmentPlan> _concrete = new();
-            private readonly List<SegmentPlan> _transient = new();
-            private readonly List<SegmentPlan> _active = new();
-            private readonly List<SegmentPlan> _marqueeBase = new();
-            private readonly List<SegmentPlan> _marqueeCurrent = new();
+            private readonly List<SegmentSelectionModel> _committed = new(); 
+            private readonly List<SegmentSelectionModel> _effective = new();     
+            private readonly List<SegmentSelectionModel> _marqueeBase = new();
+            private readonly List<SegmentSelectionModel> _marqueeCurrent = new();
             private bool _marqueeActive;
             private MarqueeMode _marqueeMode;
 
-            public IReadOnlyList<SegmentPlan> ActiveSelection => _active;
+            public IReadOnlyList<SegmentSelectionModel> EffectiveSelection => _effective;
 
-            public bool IsSelected(SegmentPlan plan)
+            public bool IsSelected(SegmentSelectionModel model)
             {
-                if (plan == null)
+                if (model == null)
                     return false;
 
-                return _active.Contains(plan);
+                return _effective.Contains(model);
             }
 
-            public void ReplaceConcrete(IReadOnlyList<SegmentPlan> selectedPlans)
+            public void SetCommittedSelection(IReadOnlyList<SegmentSelectionModel> selectedModels)
             {
-                _concrete.Clear();
+                _committed.Clear();
 
-                if (selectedPlans != null)
+                if (selectedModels != null)
                 {
-                    for (int i = 0; i < selectedPlans.Count; i++)
-                        AddUnique(_concrete, selectedPlans[i]);
+                    for (int i = 0; i < selectedModels.Count; i++)
+                        AddUnique(_committed, selectedModels[i]);
                 }
 
-                _transient.Clear();
-                RebuildActiveSelection();
+                RebuildEffectiveSelection();
             }
 
             public void Clear()
             {
-                _concrete.Clear();
-                _transient.Clear();
+                _committed.Clear();
                 _marqueeBase.Clear();
                 _marqueeCurrent.Clear();
                 _marqueeActive = false;
-                _active.Clear();
+                _effective.Clear();
             }
 
-            public void ClickSingle(SegmentPlan clicked)
+            public List<SegmentSelectionModel> BuildSingleSelection(SegmentSelectionModel clicked)
             {
-                _transient.Clear();
-                _concrete.Clear();
-                AddUnique(_concrete, clicked);
-                RebuildActiveSelection();
+                var list = new List<SegmentSelectionModel>();
+                if (clicked != null)
+                    list.Add(clicked);
+                return list;
             }
 
-            public void CtrlClick(SegmentPlan clicked)
+            public List<SegmentSelectionModel> BuildToggleSelection(SegmentSelectionModel clicked)
             {
-                CommitTransientToConcrete();
-                Toggle(_concrete, clicked);
-                RebuildActiveSelection();
+                var list = new List<SegmentSelectionModel>(_committed);
+                Toggle(list, clicked);
+                return list;
             }
 
-            public void ShiftClick(SegmentPlan clicked, IReadOnlyList<PlanBlock> blocks)
+            public List<SegmentSelectionModel> BuildRangeSelection(SegmentSelectionModel clicked, IReadOnlyList<PlanBlock> blocks)
             {
+                var list = new List<SegmentSelectionModel>();
                 if (clicked == null)
-                    return;
+                    return list;
 
-                if (_concrete.Count == 0)
+                if (_committed.Count == 0)
                 {
-                    ClickSingle(clicked);
-                    return;
+                    list.Add(clicked);
+                    return list;
                 }
 
-                var anchor = _concrete[^1];
-                if (!TryGetBlockByPlan(anchor, blocks, out var anchorBlock) ||
-                    !TryGetBlockByPlan(clicked, blocks, out var clickedBlock))
+                var anchor = _committed[^1];
+                if (!TryGetBlockByModel(anchor, blocks, out var anchorBlock) ||
+                    !TryGetBlockByModel(clicked, blocks, out var clickedBlock))
                 {
-                    ClickSingle(clicked);
-                    return;
+                    list.Add(clicked);
+                    return list;
                 }
 
                 var marquee = BuildMarqueeFromLayoutRects(anchorBlock.LayoutRect, clickedBlock.LayoutRect);
 
-                _transient.Clear();
+                list.AddRange(_committed);
                 for (int i = 0; i < blocks.Count; i++)
                 {
                     var candidate = blocks[i];
-                    if (candidate == null || candidate.Plan == null)
+                    if (candidate == null || candidate.Model == null)
                         continue;
 
-                    if (candidate.LayoutRect.Overlaps(marquee) && !_concrete.Contains(candidate.Plan))
-                        AddUnique(_transient, candidate.Plan);
+                    if (candidate.LayoutRect.Overlaps(marquee))
+                        AddUnique(list, candidate.Model);
                 }
 
-                if (_transient.Count == 0 && !_concrete.Contains(clicked))
-                    AddUnique(_transient, clicked);
-
-                RebuildActiveSelection();
+                return list;
             }
 
             public void BeginMarquee(MarqueeMode mode)
             {
-                CommitTransientToConcrete();
-
                 _marqueeBase.Clear();
                 _marqueeCurrent.Clear();
                 _marqueeActive = true;
                 _marqueeMode = mode;
 
                 if (mode != MarqueeMode.Replace)
-                {
-                    for (int i = 0; i < _concrete.Count; i++)
-                        AddUnique(_marqueeBase, _concrete[i]);
-                }
+                    AddUnique(_marqueeBase, _committed);
 
-                RebuildActiveSelection();
+                RebuildEffectiveSelection();
             }
 
-            public void UpdateMarquee(IReadOnlyList<SegmentPlan> marqueeHits)
+            public void UpdateMarquee(IReadOnlyList<SegmentSelectionModel> marqueeHits)
             {
                 if (!_marqueeActive)
                     return;
@@ -310,123 +348,103 @@ namespace TimboJimboEditor.Sequencer
                         if (_marqueeMode == MarqueeMode.Subtractive && !_marqueeBase.Contains(hit))
                             continue;
 
-                        if (_marqueeMode == MarqueeMode.Replace || _marqueeMode == MarqueeMode.Additive || _marqueeMode == MarqueeMode.Subtractive)
-                            AddUnique(_marqueeCurrent, hit);
+                        AddUnique(_marqueeCurrent, hit);
                     }
                 }
 
-                RebuildActiveSelection();
+                RebuildEffectiveSelection();
             }
 
-            public void EndMarquee(bool commit)
+            public List<SegmentSelectionModel> BuildCommittedMarqueeSelection()
             {
                 if (!_marqueeActive)
-                    return;
+                    return new List<SegmentSelectionModel>(_committed);
 
-                if (commit)
-                {
-                    _concrete.Clear();
+                var list = new List<SegmentSelectionModel>();
+                BuildMarqueeResult(list);
+                return list;
+            }
 
-                    if (_marqueeMode == MarqueeMode.Replace)
-                    {
-                        for (int i = 0; i < _marqueeCurrent.Count; i++)
-                            AddUnique(_concrete, _marqueeCurrent[i]);
-                    }
-                    else if (_marqueeMode == MarqueeMode.Additive)
-                    {
-                        for (int i = 0; i < _marqueeBase.Count; i++)
-                            AddUnique(_concrete, _marqueeBase[i]);
-                        for (int i = 0; i < _marqueeCurrent.Count; i++)
-                            AddUnique(_concrete, _marqueeCurrent[i]);
-                    }
-                    else // Subtractive
-                    {
-                        for (int i = 0; i < _marqueeBase.Count; i++)
-                        {
-                            var candidate = _marqueeBase[i];
-                            if (!_marqueeCurrent.Contains(candidate))
-                                AddUnique(_concrete, candidate);
-                        }
-                    }
-                }
-
+            public void EndMarquee()
+            {
                 _marqueeBase.Clear();
                 _marqueeCurrent.Clear();
                 _marqueeActive = false;
-                RebuildActiveSelection();
+                RebuildEffectiveSelection();
             }
 
-            private void CommitTransientToConcrete()
+            private void RebuildEffectiveSelection()
             {
-                for (int i = 0; i < _transient.Count; i++)
-                    AddUnique(_concrete, _transient[i]);
-
-                _transient.Clear();
-            }
-
-            private void RebuildActiveSelection()
-            {
-                _active.Clear();
+                _effective.Clear();
 
                 if (_marqueeActive)
                 {
-                    if (_marqueeMode == MarqueeMode.Replace)
-                    {
-                        for (int i = 0; i < _marqueeCurrent.Count; i++)
-                            AddUnique(_active, _marqueeCurrent[i]);
-                    }
-                    else if (_marqueeMode == MarqueeMode.Additive)
-                    {
-                        for (int i = 0; i < _marqueeBase.Count; i++)
-                            AddUnique(_active, _marqueeBase[i]);
-                        for (int i = 0; i < _marqueeCurrent.Count; i++)
-                            AddUnique(_active, _marqueeCurrent[i]);
-                    }
-                    else // Subtractive
-                    {
+                    BuildMarqueeResult(_effective);
+                    return;
+                }
+
+                AddUnique(_effective, _committed);
+            }
+
+            private void BuildMarqueeResult(List<SegmentSelectionModel> output)
+            {
+                switch (_marqueeMode)
+                {
+                    case MarqueeMode.Replace:
+                        AddUnique(output, _marqueeCurrent);
+                        break;
+
+                    case MarqueeMode.Additive:
+                        AddUnique(output, _marqueeBase);
+                        AddUnique(output, _marqueeCurrent);
+                        break;
+
+                    case MarqueeMode.Subtractive:
                         for (int i = 0; i < _marqueeBase.Count; i++)
                         {
                             var candidate = _marqueeBase[i];
                             if (!_marqueeCurrent.Contains(candidate))
-                                AddUnique(_active, candidate);
+                                AddUnique(output, candidate);
                         }
-                    }
-                    return;
+                        break;
                 }
-
-                for (int i = 0; i < _concrete.Count; i++)
-                    AddUnique(_active, _concrete[i]);
-
-                for (int i = 0; i < _transient.Count; i++)
-                    AddUnique(_active, _transient[i]);
             }
 
-            private static void Toggle(List<SegmentPlan> list, SegmentPlan plan)
+            private static void Toggle(List<SegmentSelectionModel> list, SegmentSelectionModel model)
             {
-                if (plan == null)
+                if (model == null)
                     return;
 
-                int existingIndex = list.FindIndex(p => ReferenceEquals(p, plan));
+                int existingIndex = list.FindIndex(p => ReferenceEquals(p, model));
                 if (existingIndex >= 0)
                     list.RemoveAt(existingIndex);
                 else
-                    list.Add(plan);
+                    list.Add(model);
             }
 
-            private static void AddUnique(List<SegmentPlan> list, SegmentPlan plan)
+            private static void AddUnique(List<SegmentSelectionModel> list, SegmentSelectionModel model)
             {
-                if (plan == null || list.Contains(plan))
+                if (model == null || list.Contains(model))
                     return;
 
-                list.Add(plan);
+                list.Add(model);
             }
 
-            private static bool TryGetBlockByPlan(SegmentPlan plan, IReadOnlyList<PlanBlock> blocks, out PlanBlock block)
+            private static void AddUnique(List<SegmentSelectionModel> list, IReadOnlyList<SegmentSelectionModel> models)
+            {
+                if (models == null)
+                    return;
+
+                for (int i = 0; i < models.Count; i++)
+                    AddUnique(list, models[i]);
+            }
+
+            private static bool TryGetBlockByModel(SegmentSelectionModel model, IReadOnlyList<PlanBlock> blocks, out PlanBlock block)
             {
                 for (int i = 0; i < blocks.Count; i++)
                 {
                     var candidate = blocks[i];
-                    if (candidate != null && ReferenceEquals(candidate.Plan, plan))
+                    if (candidate != null && ReferenceEquals(candidate.Model, model))
                     {
                         block = candidate;
                         return true;
@@ -449,19 +467,19 @@ namespace TimboJimboEditor.Sequencer
         {
             private readonly struct Entry
             {
-                public readonly SegmentPlan Plan;
+                public readonly SegmentSelectionModel Model;
                 public readonly float Start;
                 public readonly float Duration;
                 public readonly bool CanAdjustStart;
                 public readonly bool CanAdjustDuration;
 
-                public Entry(SegmentPlan plan)
+                public Entry(SegmentSelectionModel model)
                 {
-                    Plan = plan;
-                    Start = plan.Timing.AbsoluteStartTime;
-                    Duration = plan.Timing.AbsoluteDuration;
-                    CanAdjustStart = plan.CanAdjustStartTime;
-                    CanAdjustDuration = plan.CanAdjustDuration;
+                    Model = model;
+                    Start = model.StartTime;
+                    Duration = model.Duration;
+                    CanAdjustStart = model.CanAdjustStartTime;
+                    CanAdjustDuration = model.CanAdjustDuration;
                 }
             }
 
@@ -482,12 +500,15 @@ namespace TimboJimboEditor.Sequencer
             public readonly Vector2 PointerStart;
             public readonly float InitialSelectionStart;
             public readonly float InitialSelectionDuration;
+            public readonly float InitialPivotTime;
 
             private readonly List<Entry> _entries;
-            private readonly Dictionary<SegmentPlan, GhostTiming> _ghostByPlan;
+            private readonly Dictionary<SegmentSelectionModel, GhostTiming> _ghostByModel;
             private bool _hasChanges;
+            private bool _canSmear;
 
             public bool HasChanges => _hasChanges;
+            public bool CanSmear => _canSmear;
 
             public SelectionTransformOperation(
                 DragKind kind,
@@ -495,34 +516,39 @@ namespace TimboJimboEditor.Sequencer
                 Vector2 pointerStart,
                 float selectionStart,
                 float selectionDuration,
-                IReadOnlyList<SegmentPlan> selectedPlans)
+                float pivotTime,
+                IReadOnlyList<SegmentSelectionModel> selectedModels)
             {
                 Kind = kind;
                 PointerId = pointerId;
                 PointerStart = pointerStart;
                 InitialSelectionStart = selectionStart;
                 InitialSelectionDuration = Mathf.Max(selectionDuration, 0.0001f);
+                InitialPivotTime = pivotTime;
 
                 _entries = new List<Entry>();
-                _ghostByPlan = new Dictionary<SegmentPlan, GhostTiming>();
+                _ghostByModel = new Dictionary<SegmentSelectionModel, GhostTiming>();
                 _hasChanges = false;
+                _canSmear = false;
 
-                if (selectedPlans == null)
+                if (selectedModels == null)
                     return;
 
-                for (int i = 0; i < selectedPlans.Count; i++)
+                for (int i = 0; i < selectedModels.Count; i++)
                 {
-                    var plan = selectedPlans[i];
-                    if (plan == null)
+                    var model = selectedModels[i];
+                    if (model == null)
                         continue;
 
-                    var entry = new Entry(plan);
+                    var entry = new Entry(model);
                     _entries.Add(entry);
-                    _ghostByPlan[plan] = new GhostTiming(entry.Start, entry.Duration);
+                    _ghostByModel[model] = new GhostTiming(entry.Start, entry.Duration);
                 }
+
+                _canSmear = _entries.Count > 0;
             }
 
-            public void UpdateGhost(float dt)
+            public void UpdateLinear(float dt)
             {
                 if (_entries.Count == 0)
                     return;
@@ -592,16 +618,107 @@ namespace TimboJimboEditor.Sequencer
                         }
                     }
 
-                    _ghostByPlan[entry.Plan] = new GhostTiming(newStart, newDuration);
+                    _ghostByModel[entry.Model] = new GhostTiming(newStart, newDuration);
 
                     if (Mathf.Abs(newStart - entry.Start) > 0.0001f || Mathf.Abs(newDuration - entry.Duration) > 0.0001f)
                         _hasChanges = true;
                 }
             }
 
-            public bool TryGetGhost(SegmentPlan plan, out float start, out float duration)
+            public void UpdateSmear(float dt)
             {
-                if (plan != null && _ghostByPlan.TryGetValue(plan, out var ghost))
+                if (_entries.Count == 0)
+                    return;
+
+                if (!_canSmear)
+                {
+                    UpdateLinear(dt);
+                    return;
+                }
+
+                UpdateGhostSmearFromPivot(dt);
+            }
+
+            private void UpdateGhostSmearFromPivot(float dt)
+            {
+                float initialStart = InitialSelectionStart;
+                float initialDuration = Mathf.Max(InitialSelectionDuration, 0.0001f);
+                float initialEnd = initialStart + initialDuration;
+
+                float pivot = Mathf.Clamp(InitialPivotTime, initialStart + 0.0001f, initialEnd - 0.0001f);
+
+                float pivotU = Mathf.Clamp01((pivot - initialStart) / initialDuration);
+                pivotU = Mathf.Clamp(pivotU, 0.001f, 0.999f);
+
+                float normalizedDelta = dt / initialDuration;
+                float maxPositive = 1f - pivotU;
+                float maxNegative = -pivotU;
+                float pivotShiftU = Mathf.Clamp(normalizedDelta * 0.75f, maxNegative + 0.0001f, maxPositive - 0.0001f);
+
+                _hasChanges = false;
+
+                for (int i = 0; i < _entries.Count; i++)
+                {
+                    var entry = _entries[i];
+                    float entryEnd = entry.Start + entry.Duration;
+
+                    float mappedStart = MapSmearedTime(entry.Start, initialStart, initialDuration, pivotU, pivotShiftU);
+                    float mappedEnd = MapSmearedTime(entryEnd, initialStart, initialDuration, pivotU, pivotShiftU);
+
+                    float newStart = entry.Start;
+                    float newDuration = entry.Duration;
+
+                    if (entry.CanAdjustStart && entry.CanAdjustDuration)
+                    {
+                        newStart = Mathf.Max(0f, mappedStart);
+                        newDuration = Mathf.Max(0.01f, mappedEnd - newStart);
+                    }
+                    else if (entry.CanAdjustStart)
+                    {
+                        newStart = Mathf.Max(0f, mappedStart);
+                        newDuration = entry.Duration;
+                    }
+                    else if (entry.CanAdjustDuration)
+                    {
+                        newStart = entry.Start;
+                        newDuration = Mathf.Max(0.01f, mappedEnd - newStart);
+                    }
+
+                    _ghostByModel[entry.Model] = new GhostTiming(newStart, newDuration);
+
+                    if (Mathf.Abs(newStart - entry.Start) > 0.0001f || Mathf.Abs(newDuration - entry.Duration) > 0.0001f)
+                        _hasChanges = true;
+                }
+            }
+
+            private static float MapSmearedTime(float time, float start, float duration, float pivotU, float pivotShiftU)
+            {
+                if (duration <= 0.0001f)
+                    return time;
+
+                float u = Mathf.Clamp01((time - start) / duration);
+
+                float mappedU;
+                if (u <= pivotU)
+                {
+                    float denom = Mathf.Max(pivotU, 0.000001f);
+                    float t = u / denom;
+                    mappedU = u + pivotShiftU * t;
+                }
+                else
+                {
+                    float denom = Mathf.Max(1f - pivotU, 0.000001f);
+                    float t = (1f - u) / denom;
+                    mappedU = u + pivotShiftU * t;
+                }
+
+                mappedU = Mathf.Clamp01(mappedU);
+                return start + mappedU * duration;
+            }
+
+            public bool TryGetGhost(SegmentSelectionModel model, out float start, out float duration)
+            {
+                if (model != null && _ghostByModel.TryGetValue(model, out var ghost))
                 {
                     start = ghost.Start;
                     duration = ghost.Duration;
@@ -613,7 +730,7 @@ namespace TimboJimboEditor.Sequencer
                 return false;
             }
 
-            public void GetCommittedChanges(List<(SegmentPlan plan, float start, float duration)> output)
+            public void GetCommittedChanges(List<(SegmentSelectionModel model, float start, float duration)> output)
             {
                 output.Clear();
                 if (!_hasChanges)
@@ -622,13 +739,13 @@ namespace TimboJimboEditor.Sequencer
                 for (int i = 0; i < _entries.Count; i++)
                 {
                     var entry = _entries[i];
-                    if (!_ghostByPlan.TryGetValue(entry.Plan, out var ghost))
+                    if (!_ghostByModel.TryGetValue(entry.Model, out var ghost))
                         continue;
 
                     if (Mathf.Abs(ghost.Start - entry.Start) <= 0.0001f && Mathf.Abs(ghost.Duration - entry.Duration) <= 0.0001f)
                         continue;
 
-                    output.Add((entry.Plan, ghost.Start, ghost.Duration));
+                    output.Add((entry.Model, ghost.Start, ghost.Duration));
                 }
             }
         }
@@ -639,7 +756,7 @@ namespace TimboJimboEditor.Sequencer
             style.backgroundColor = new Color(0.145f, 0.145f, 0.145f);
             style.overflow = Overflow.Hidden;
             focusable = true;
-            
+
             _selectionOutline = new VisualElement
             {
                 style =
@@ -697,6 +814,102 @@ namespace TimboJimboEditor.Sequencer
             };
             Add(_playhead);
 
+            _playbackRangeBand = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    height = RulerHeight,
+                    left = 0f,
+                    width = 0f,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.18f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeBand);
+
+            _playbackRangeStartHandle = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    width = 2f,
+                    left = 0f,
+                    height = RulerHeight,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.95f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeStartHandle);
+
+            _playbackRangeEndHandle = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    width = 2f,
+                    left = 0f,
+                    height = RulerHeight,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.95f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeEndHandle);
+
+            _playbackRangeGhostBand = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    height = RulerHeight,
+                    left = 0f,
+                    width = 0f,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.10f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeGhostBand);
+
+            _playbackRangeGhostStartHandle = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    width = 2f,
+                    left = 0f,
+                    height = RulerHeight,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.5f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeGhostStartHandle);
+
+            _playbackRangeGhostEndHandle = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0f,
+                    width = 2f,
+                    left = 0f,
+                    height = RulerHeight,
+                    backgroundColor = new Color(0.173f, 0.471f, 0.922f, 0.5f),
+                    display = DisplayStyle.None,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_playbackRangeGhostEndHandle);
+
             _snapGuide = new VisualElement
             {
                 style =
@@ -736,6 +949,22 @@ namespace TimboJimboEditor.Sequencer
             };
             Add(_marqueeBox);
 
+            _dragDropDraftPreview = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    display = DisplayStyle.None,
+                    left = 0f,
+                    top = 0f,
+                    width = 0f,
+                    height = LaneHeight,
+                    opacity = 0.9f,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            Add(_dragDropDraftPreview);
+
             generateVisualContent += DrawRuler;
             RegisterCallback<GeometryChangedEvent>(_ =>
             {
@@ -747,23 +976,28 @@ namespace TimboJimboEditor.Sequencer
             RegisterCallback<PointerDownEvent>(OnPointerDown);
             RegisterCallback<PointerMoveEvent>(OnPointerMove);
             RegisterCallback<PointerUpEvent>(OnPointerUp);
+            RegisterCallback<DragUpdatedEvent>(OnDragUpdated);
+            RegisterCallback<DragPerformEvent>(OnDragPerform);
+            RegisterCallback<DragLeaveEvent>(_ => ClearDropDraftPreview());
+            RegisterCallback<DragExitedEvent>(_ => ClearDropDraftPreview());
             RegisterCallback<KeyDownEvent>(OnKeyDown);
             this.AddManipulator(new ContextualMenuManipulator(BuildContextMenu));
         }
 
-        public void SetView(SegmentPlan activeRoot, IReadOnlyList<SegmentPlan> activeLayer, IReadOnlyList<SegmentPlan> selectedPlans)
+        public void SetView(IReadOnlyList<SegmentSelectionModel> activeModels, IReadOnlyList<SegmentSelectionModel> selectedModels)
         {
-            _activeRoot = activeRoot;
-            _selection.ReplaceConcrete(selectedPlans);
+            ResetInteractionState();
+            _selection.SetCommittedSelection(selectedModels);
 
-            _activeLayer.Clear();
-            if (activeLayer != null)
+            _models.Clear();
+            if (activeModels != null)
             {
-                for (int i = 0; i < activeLayer.Count; i++)
-                    _activeLayer.Add(activeLayer[i]);
+                for (int i = 0; i < activeModels.Count; i++)
+                    _models.Add(activeModels[i]);
             }
 
             RebuildBlocks();
+            RebuildZeroDurationMarkers();
 
             if (!_viewWasEverFramed)
                 FrameAllInternal();
@@ -773,11 +1007,22 @@ namespace TimboJimboEditor.Sequencer
             MarkDirtyRepaint();
         }
 
-        public void SetSelection(IReadOnlyList<SegmentPlan> selectedPlans)
+        public void SetSelection(IReadOnlyList<SegmentSelectionModel> selectedModels)
         {
-            _selection.ReplaceConcrete(selectedPlans);
+            _selection.SetCommittedSelection(selectedModels);
             RebuildSnapTimes();
             RefreshSelectionVisuals();
+        }
+
+        public void SetDropTargetContext(SequenceProvider provider, string sequenceName)
+        {
+            _dropTargetProvider = provider;
+            _dropTargetSequenceName = sequenceName;
+        }
+
+        public void RequestReframeOnNextSetView()
+        {
+            _viewWasEverFramed = false;
         }
 
         public void SetTime(float time)
@@ -793,20 +1038,34 @@ namespace TimboJimboEditor.Sequencer
             PositionPlayhead();
         }
 
+        public void SetPlaybackRange(float start, float end, bool visible)
+        {
+            _playbackRangeStart = Mathf.Max(0f, start);
+            _playbackRangeEnd = Mathf.Max(_playbackRangeStart + MinPlaybackRangeDuration, end);
+            _showPlaybackRange = visible;
+            PositionPlaybackRangeVisuals();
+            MarkDirtyRepaint();
+        }
+
         private void RebuildBlocks()
         {
             _contentRoot.Clear();
             _blocks.Clear();
 
-            for (int i = 0; i < _activeLayer.Count; i++)
+            for (int i = 0; i < _models.Count; i++)
             {
-                var segmentPlan = _activeLayer[i];
-                var editor = SegmentEditorRegistry.GetEditor(segmentPlan.Segment);
-                var blockColors = editor.GetBlockColors(segmentPlan.Segment);
+                var model = _models[i];
+                
+                // Skip zero-duration models; they're handled by RebuildZeroDurationMarkers
+                if (IsZeroDuration(model))
+                    continue;
+
+                var editor = SegmentBlockEditorRegistry.GetEditor(model.Segment);
+                var blockColors = editor.GetBlockColors(model.Segment);
 
                 var planVisual = new PlanBlock
                 {
-                    Plan = segmentPlan,
+                    Model = model,
                     Root = new VisualElement
                     {
                         style =
@@ -872,55 +1131,34 @@ namespace TimboJimboEditor.Sequencer
                     bool shift = evt.shiftKey;
                     bool action = evt.ctrlKey || evt.commandKey;
 
-                    bool selectedBeforeClick = _selection.IsSelected(planVisual.Plan);
-                    if (selectedBeforeClick)
+                    bool selectedBeforeClick = _selection.IsSelected(planVisual.Model);
+                    if (!selectedBeforeClick)
                     {
-                        // Always defer selection change to pointer-up so transform intent wins,
-                        // while preserving click semantics when no drag occurs.
-                        ArmSelectionTransformFromPointer(evt.position, evt.pointerId);
-                        _pendingSelectedClickBlock = planVisual;
-                        _pendingSelectedClickPointerId = evt.pointerId;
-                        _pendingSelectedClickShift = shift;
-                        _pendingSelectedClickAction = action;
+                        RequestBlockClickSelection(planVisual, shift, action);
 
-                        evt.StopPropagation();
-                        return;
+                        if (shift || action)
+                        {
+                            evt.StopPropagation();
+                            return;
+                        }
                     }
 
-                    HandleBlockSelectionClick(planVisual, shift, action);
-
-                    if (shift || action)
+                    BeginPointerSession(new PointerSession
                     {
-                        evt.StopPropagation();
-                        return;
-                    }
-
-                    ArmSelectionTransformFromPointer(evt.position, evt.pointerId);
+                        Mode = PointerSessionMode.BlockPress,
+                        PointerId = evt.pointerId,
+                        PointerStartWorld = evt.position,
+                        PointerStartLocal = this.WorldToLocal(evt.position),
+                        PressedBlock = planVisual,
+                        Shift = shift,
+                        Action = action,
+                        BlockWasSelected = selectedBeforeClick,
+                    });
 
                     evt.StopPropagation();
                 });
 
-                bool zeroDur = IsZeroDuration(segmentPlan);
-                if (zeroDur)
-                {
-                    planVisual.Root.style.borderTopWidth = 0f;
-                    planVisual.Root.style.borderBottomWidth = 0f;
-                    planVisual.Root.style.borderLeftWidth = 0f;
-                    planVisual.Root.style.borderRightWidth = 0f;
-                    planVisual.Root.style.backgroundColor = Color.clear;
-                    planVisual.Root.style.overflow = Overflow.Visible;
-
-                    var capturedPlan = segmentPlan;
-                    var capturedRoot = planVisual.Root;
-                    planVisual.Root.generateVisualContent += ctx =>
-                    {
-                        DrawZeroDurationMarker(ctx, capturedPlan, capturedRoot);
-                    };
-                }
-                else
-                {
-                    editor.OnBlockGUI(segmentPlan.Segment, planVisual.Root);
-                }
+                editor.OnBlockGUI(model.Segment, planVisual.Root);
 
                 _contentRoot.Add(planVisual.Root);
                 _blocks.Add(planVisual);
@@ -934,8 +1172,15 @@ namespace TimboJimboEditor.Sequencer
             for (int i = 0; i < _blocks.Count; i++)
             {
                 var block = _blocks[i];
-                bool selected = _selection.IsSelected(block.Plan);
+                bool selected = _selection.IsSelected(block.Model);
                 block.SelectionHighlight.style.display = selected ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
+            for (int i = 0; i < _markers.Count; i++)
+            {
+                var marker = _markers[i];
+                bool selected = _selection.IsSelected(marker.Model);
+                marker.SelectionHighlight.style.display = selected ? DisplayStyle.Flex : DisplayStyle.None;
             }
 
             using(var scope = new SkipTransitionsScope())
@@ -948,9 +1193,132 @@ namespace TimboJimboEditor.Sequencer
             MarkDirtyRepaint();
         }
 
+        private void RebuildZeroDurationMarkers()
+        {
+            _markers.Clear();
+
+            for (int i = 0; i < _models.Count; i++)
+            {
+                var model = _models[i];
+                
+                // Only handle zero-duration models
+                if (!IsZeroDuration(model))
+                    continue;
+
+                var editor = SegmentBlockEditorRegistry.GetEditor(model.Segment);
+                var markerColors = editor.GetBlockColors(model.Segment);
+
+                var marker = new ZeroDurationMarker
+                {
+                    Model = model,
+                    Root = new VisualElement
+                    {
+                        style =
+                        {
+                            position = Position.Absolute,
+                            borderTopLeftRadius = 4f,
+                            borderTopRightRadius = 4f,
+                            borderBottomLeftRadius = 4f,
+                            borderBottomRightRadius = 4f,
+                            borderTopWidth = 1f,
+                            borderBottomWidth = 1f,
+                            borderLeftWidth = 1f,
+                            borderRightWidth = 1f,
+                            borderTopColor = markerColors.border,
+                            borderBottomColor = markerColors.border,
+                            borderLeftColor = markerColors.border,
+                            borderRightColor = markerColors.border,
+                            backgroundColor = markerColors.fill,
+                            transformOrigin = new TransformOrigin(Length.Percent(50f), Length.Percent(50f)),
+                            transitionProperty = new List<StylePropertyName>() { "left", "top", "width", "height", "translate" },
+                            transitionDuration = new List<TimeValue>() { TimeValue.Milliseconds(125) },
+                            transitionTimingFunction = new List<EasingFunction>() { new EasingFunction(EasingMode.EaseOutCubic) },
+                        }
+                    },
+                    SelectionHighlight = new VisualElement
+                    {
+                        style =
+                        {
+                            position = Position.Absolute,
+                            left = -2f,
+                            top = -2f,
+                            right = -2f,
+                            bottom = -2f,
+                            borderTopWidth = 2f,
+                            borderBottomWidth = 2f,
+                            borderLeftWidth = 2f,
+                            borderRightWidth = 2f,
+                            borderTopLeftRadius = 6f,
+                            borderTopRightRadius = 6f,
+                            borderBottomLeftRadius = 6f,
+                            borderBottomRightRadius = 6f,
+                            borderTopColor = new Color(0.35f, 0.65f, 1f, 0.9f),
+                            borderBottomColor = new Color(0.35f, 0.65f, 1f, 0.9f),
+                            borderLeftColor = new Color(0.35f, 0.65f, 1f, 0.9f),
+                            borderRightColor = new Color(0.35f, 0.65f, 1f, 0.9f),
+                            backgroundColor = new Color(0.35f, 0.65f, 1f, 0.15f),
+                            display = DisplayStyle.None,
+                        },
+                        pickingMode = PickingMode.Ignore,
+                    }
+                };
+
+                marker.Root.Add(marker.SelectionHighlight);
+
+                marker.Root.RegisterCallback<PointerDownEvent>(evt =>
+                {
+                    if (evt.button != 0)
+                        return;
+
+                    Focus();
+
+                    bool shift = evt.shiftKey;
+                    bool action = evt.ctrlKey || evt.commandKey;
+
+                    bool selectedBeforeClick = _selection.IsSelected(marker.Model);
+                    if (!selectedBeforeClick)
+                    {
+                        RequestMarkerClickSelection(marker, shift, action);
+
+                        if (shift || action)
+                        {
+                            evt.StopPropagation();
+                            return;
+                        }
+                    }
+
+                    BeginPointerSession(new PointerSession
+                    {
+                        Mode = PointerSessionMode.BlockPress,
+                        PointerId = evt.pointerId,
+                        PointerStartWorld = evt.position,
+                        PointerStartLocal = this.WorldToLocal(evt.position),
+                        PressedBlock = null,
+                        Shift = shift,
+                        Action = action,
+                        BlockWasSelected = selectedBeforeClick,
+                    });
+
+                    evt.StopPropagation();
+                });
+
+                var capturedModel = model;
+                var capturedRoot = marker.Root;
+                marker.Root.generateVisualContent += ctx =>
+                {
+                    DrawZeroDurationMarker(ctx, capturedModel, capturedRoot);
+                };
+
+                _contentRoot.Add(marker.Root);
+                _markers.Add(marker);
+            }
+
+            RefreshSelectionVisuals();
+        }
+
         private bool TryGetSelectionBounds(out Rect bounds, bool includePadding)
         {
-            var selection = _selection.ActiveSelection;
+            var selection = _selection.EffectiveSelection;
             if (selection.Count == 0)
             {
                 bounds = default;
@@ -966,10 +1334,27 @@ namespace TimboJimboEditor.Sequencer
             for (int i = 0; i < _blocks.Count; i++)
             {
                 var block = _blocks[i];
-                if (!_selection.IsSelected(block.Plan))
+                if (!_selection.IsSelected(block.Model))
                     continue;
 
                 var layoutRect = block.LayoutRect;
+                if (layoutRect.width <= 0f || layoutRect.height <= 0f)
+                    continue;
+
+                minX = Mathf.Min(minX, layoutRect.xMin);
+                minY = Mathf.Min(minY, layoutRect.yMin);
+                maxX = Mathf.Max(maxX, layoutRect.xMax);
+                maxY = Mathf.Max(maxY, layoutRect.yMax);
+                foundAny = true;
+            }
+
+            for (int i = 0; i < _markers.Count; i++)
+            {
+                var marker = _markers[i];
+                if (!_selection.IsSelected(marker.Model))
+                    continue;
+
+                var layoutRect = marker.LayoutRect;
                 if (layoutRect.width <= 0f || layoutRect.height <= 0f)
                     continue;
 
@@ -1007,47 +1392,135 @@ namespace TimboJimboEditor.Sequencer
             _selectionOutline.style.display = DisplayStyle.Flex;
         }
 
-        private void HandleBlockSelectionClick(PlanBlock clickedBlock, bool shift, bool action)
+        private void RequestBlockClickSelection(PlanBlock clickedBlock, bool shift, bool action)
         {
-            if (clickedBlock?.Plan == null)
+            if (clickedBlock?.Model == null)
                 return;
 
+            List<SegmentSelectionModel> targetSelection;
             if (shift)
-                _selection.ShiftClick(clickedBlock.Plan, _blocks);
+                targetSelection = _selection.BuildRangeSelection(clickedBlock.Model, _blocks);
             else if (action)
-                _selection.CtrlClick(clickedBlock.Plan);
+                targetSelection = _selection.BuildToggleSelection(clickedBlock.Model);
             else
-                _selection.ClickSingle(clickedBlock.Plan);
+                targetSelection = _selection.BuildSingleSelection(clickedBlock.Model);
 
-            RebuildSnapTimes();
-            RefreshSelectionVisuals();
-            SelectionChanged?.Invoke(_selection.ActiveSelection);
+            SelectionChanged?.Invoke(targetSelection);
+        }
+
+        private void RequestMarkerClickSelection(ZeroDurationMarker clickedMarker, bool shift, bool action)
+        {
+            if (clickedMarker?.Model == null)
+                return;
+
+            List<SegmentSelectionModel> targetSelection;
+            if (action)
+                targetSelection = _selection.BuildToggleSelection(clickedMarker.Model);
+            else
+                targetSelection = _selection.BuildSingleSelection(clickedMarker.Model);
+
+            SelectionChanged?.Invoke(targetSelection);
+        }
+
+        private void BeginPointerSession(PointerSession session)
+        {
+            _pointerSession = session;
+            this.CapturePointer(session.PointerId);
+        }
+
+        private void EndPointerSession()
+        {
+            if (_pointerSession == null)
+                return;
+
+            int pointerId = _pointerSession.PointerId;
+            _pointerSession = null;
+
+            if (this.HasPointerCapture(pointerId))
+                this.ReleasePointer(pointerId);
+        }
+
+        private void ResetInteractionState()
+        {
+            if (_selectionTransform != null)
+                _selectionTransform = null;
+
+            if (_marqueeBox.style.display != DisplayStyle.None)
+                _marqueeBox.style.display = DisplayStyle.None;
+
+            EndPlaybackRangeGhostSession(notifyEnded: true);
+            HideSnapGuide();
+            EndPointerSession();
+        }
+
+        private static bool HasExceededDragThreshold(PointerSession session, Vector2 worldPosition)
+        {
+            if (session == null)
+                return false;
+
+            float thresholdSq = TransformDragThresholdPx * TransformDragThresholdPx;
+            return (worldPosition - session.PointerStartWorld).sqrMagnitude >= thresholdSq;
         }
 
         private void FrameAllInternal()
+        {
+            if (_models.Count == 0)
+                return;
+
+            float maxEnd = 1f;
+            for (int i = 0; i < _models.Count; i++)
+                maxEnd = Mathf.Max(maxEnd, _models[i].EndTime);
+                
+            FrameRange(0f, maxEnd);
+        }
+
+        private void FrameSelection()
+        {
+            float start = float.MaxValue;
+            float end = float.MinValue;
+
+            var selection = _selection.EffectiveSelection;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                start = Mathf.Min(start, selection[i].StartTime);
+                end = Mathf.Max(end, selection[i].EndTime);
+            }
+
+            FrameRange(start, end);
+        }
+
+        private void FrameRange(float start, float end)
         {
             float width = resolvedStyle.width;
             if (float.IsNaN(width) || width < 10f)
                 return;
 
-            _viewWasEverFramed = true;
-            float maxEnd = 1f;
-            for (int i = 0; i < _activeLayer.Count; i++)
-                maxEnd = Mathf.Max(maxEnd, _activeLayer[i].Timing.AbsoluteEndTime);
+            if (_models.Count == 0)
+                return;
 
-            float padding = maxEnd * 0.05f;
-            float viewStart = -padding;
-            float viewEnd = maxEnd + padding;
+            if (start == float.MaxValue || end == float.MinValue)
+                return;
+
+            _viewWasEverFramed = true;
+            
+            var duration = end - start;
+
+            float padding = duration * 0.05f;
+            float viewStart = start - padding;
+            float viewEnd = end + padding;
 
             float contentWidth = Mathf.Max(width - HorizontalPadding * 2f, 10f);
             _pixelsPerSecond = Mathf.Clamp(contentWidth / Mathf.Max(viewEnd - viewStart, 0.5f), MinZoom, MaxZoom);
             _viewStart = viewStart;
         }
 
-        private bool TryBeginSelectionTransformFromPointer(Vector2 worldPosition, int pointerId)
+        private bool BeginSelectionTransformFromPointer(Vector2 worldPosition, int pointerId)
         {
             if (!TryGetSelectionTransformStart(worldPosition, out DragKind kind, out float selectionStartTime, out float selectionDurationTime))
                 return false;
+
+            var local = this.WorldToLocal(worldPosition);
+            float pivotTime = XToTime(local.x);
 
             _selectionTransform = new SelectionTransformOperation(
                 kind,
@@ -1055,29 +1528,26 @@ namespace TimboJimboEditor.Sequencer
                 worldPosition,
                 selectionStartTime,
                 selectionDurationTime,
-                _selection.ActiveSelection);
-
-            this.CapturePointer(pointerId);
+                pivotTime,
+                _selection.EffectiveSelection);
             return true;
         }
 
-        private bool ArmSelectionTransformFromPointer(Vector2 worldPosition, int pointerId)
+        private bool TryBeginSelectionTransformSession(Vector2 worldPosition, int pointerId, bool startInSmearMode)
         {
-            if (!TryGetSelectionTransformStart(worldPosition, out _, out _, out _))
+            if (_pointerSession == null)
                 return false;
 
-            _selectionTransformArmed = true;
-            _selectionTransformArmPointerId = pointerId;
-            _selectionTransformArmStartWorld = worldPosition;
-            this.CapturePointer(pointerId);
-            return true;
-        }
+            if (!BeginSelectionTransformFromPointer(worldPosition, pointerId))
+                return false;
 
-        private void ClearSelectionTransformArm()
-        {
-            _selectionTransformArmed = false;
-            _selectionTransformArmPointerId = -1;
-            _selectionTransformArmStartWorld = default;
+            bool useSmear = startInSmearMode && _selectionTransform != null && _selectionTransform.CanSmear;
+            _pointerSession.Mode = useSmear
+                ? PointerSessionMode.TransformSmear
+                : PointerSessionMode.Transform;
+
+            RebuildSnapTimes();
+            return true;
         }
 
         private bool TryGetSelectionTransformStart(Vector2 worldPosition, out DragKind kind, out float selectionStartTime, out float selectionDurationTime)
@@ -1110,7 +1580,7 @@ namespace TimboJimboEditor.Sequencer
 
         private bool TryGetSelectionTimeBounds(out float start, out float duration)
         {
-            var selection = _selection.ActiveSelection;
+            var selection = _selection.EffectiveSelection;
             if (selection.Count == 0)
             {
                 start = 0f;
@@ -1123,12 +1593,12 @@ namespace TimboJimboEditor.Sequencer
 
             for (int i = 0; i < selection.Count; i++)
             {
-                var plan = selection[i];
-                if (plan == null)
+                var model = selection[i];
+                if (model == null)
                     continue;
 
-                minStart = Mathf.Min(minStart, plan.Timing.AbsoluteStartTime);
-                maxEnd = Mathf.Max(maxEnd, plan.Timing.AbsoluteEndTime);
+                minStart = Mathf.Min(minStart, model.StartTime);
+                maxEnd = Mathf.Max(maxEnd, model.EndTime);
             }
 
             if (minStart == float.MaxValue || maxEnd == float.MinValue)
@@ -1149,36 +1619,34 @@ namespace TimboJimboEditor.Sequencer
             canResizeLeft = false;
             canResizeRight = false;
 
-            var selected = _selection.ActiveSelection;
+            var selected = _selection.EffectiveSelection;
             for (int i = 0; i < selected.Count; i++)
             {
-                var plan = selected[i];
-                if (plan == null)
+                var model = selected[i];
+                if (model == null)
                     continue;
 
-                canMove |= plan.CanAdjustStartTime;
-                canResizeLeft |= plan.CanAdjustStartTime && plan.CanAdjustDuration;
-                canResizeRight |= plan.CanAdjustDuration;
+                canMove |= model.CanAdjustStartTime;
+                canResizeLeft |= model.CanAdjustStartTime && model.CanAdjustDuration;
+                canResizeRight |= model.CanAdjustDuration;
             }
 
             if(!canResizeLeft && !canResizeRight)
             {
-                //at long as we have 2 or more items at differnet tiomes 
-                // with adjustable start times, then we can resize
                 int adjustableStartCount = 0;
                 float lastAdjustableStart = 0f;
                 for (int i = 0; i < selected.Count; i++)
                 {
-                    var plan = selected[i];
-                    if (plan == null || !plan.CanAdjustStartTime)
+                    var model = selected[i];
+                    if (model == null || !model.CanAdjustStartTime)
                         continue;
 
                     if(adjustableStartCount == 0)
                     {
                         adjustableStartCount++;
-                        lastAdjustableStart = plan.Timing.AbsoluteStartTime;
+                        lastAdjustableStart = model.StartTime;
                     }
-                    else if(Mathf.Abs(plan.Timing.AbsoluteStartTime - lastAdjustableStart) > 0.0001f)
+                    else if(Mathf.Abs(model.StartTime - lastAdjustableStart) > 0.0001f)
                     {
                         canResizeLeft = true;
                         canResizeRight = true;
@@ -1197,10 +1665,15 @@ namespace TimboJimboEditor.Sequencer
             using var scope = new SkipTransitionsScope();
             for (int i = 0; i < _blocks.Count; i++)
                 scope.Add(_blocks[i].Root);
+            for (int i = 0; i < _markers.Count; i++)
+                scope.Add(_markers[i].Root);
             scope.Add(_selectionOutline);
 
             LayoutBlocksInLanes();
+            LayoutZeroDurationMarkers();
+            LayoutDropDraftPreview();
             PositionPlayhead();
+            PositionPlaybackRangeVisuals();
             UpdateSelectionOutline();
 
             RebuildRulerLabels();
@@ -1215,6 +1688,67 @@ namespace TimboJimboEditor.Sequencer
             _playhead.style.left = TimeToX(_time) - 1f;
             _playhead.style.top = 0f;
             _playhead.style.height = Mathf.Max(0f, resolvedStyle.height);
+        }
+
+        private void PositionPlaybackRangeVisuals()
+        {
+            if (_playbackRangeBand == null || _playbackRangeStartHandle == null || _playbackRangeEndHandle == null)
+                return;
+
+            if (!_showPlaybackRange)
+            {
+                _playbackRangeBand.style.display = DisplayStyle.None;
+                _playbackRangeStartHandle.style.display = DisplayStyle.None;
+                _playbackRangeEndHandle.style.display = DisplayStyle.None;
+                _playbackRangeGhostBand.style.display = DisplayStyle.None;
+                _playbackRangeGhostStartHandle.style.display = DisplayStyle.None;
+                _playbackRangeGhostEndHandle.style.display = DisplayStyle.None;
+                return;
+            }
+
+            float startX = TimeToX(_playbackRangeStart);
+            float endX = TimeToX(_playbackRangeEnd);
+            if (endX < startX)
+                (startX, endX) = (endX, startX);
+
+            _playbackRangeBand.style.left = startX;
+            _playbackRangeBand.style.width = Mathf.Max(1f, endX - startX);
+            _playbackRangeBand.style.height = RulerHeight;
+            _playbackRangeBand.style.display = DisplayStyle.Flex;
+
+            _playbackRangeStartHandle.style.left = startX - 1f;
+            _playbackRangeStartHandle.style.height = RulerHeight;
+            _playbackRangeStartHandle.style.display = DisplayStyle.Flex;
+
+            _playbackRangeEndHandle.style.left = endX - 1f;
+            _playbackRangeEndHandle.style.height = RulerHeight;
+            _playbackRangeEndHandle.style.display = DisplayStyle.Flex;
+
+            if (!_showPlaybackRangeGhost)
+            {
+                _playbackRangeGhostBand.style.display = DisplayStyle.None;
+                _playbackRangeGhostStartHandle.style.display = DisplayStyle.None;
+                _playbackRangeGhostEndHandle.style.display = DisplayStyle.None;
+                return;
+            }
+
+            float ghostStartX = TimeToX(_playbackRangeGhostStart);
+            float ghostEndX = TimeToX(_playbackRangeGhostEnd);
+            if (ghostEndX < ghostStartX)
+                (ghostStartX, ghostEndX) = (ghostEndX, ghostStartX);
+
+            _playbackRangeGhostBand.style.left = ghostStartX;
+            _playbackRangeGhostBand.style.width = Mathf.Max(1f, ghostEndX - ghostStartX);
+            _playbackRangeGhostBand.style.height = RulerHeight;
+            _playbackRangeGhostBand.style.display = DisplayStyle.Flex;
+
+            _playbackRangeGhostStartHandle.style.left = ghostStartX - 1f;
+            _playbackRangeGhostStartHandle.style.height = RulerHeight;
+            _playbackRangeGhostStartHandle.style.display = DisplayStyle.Flex;
+
+            _playbackRangeGhostEndHandle.style.left = ghostEndX - 1f;
+            _playbackRangeGhostEndHandle.style.height = RulerHeight;
+            _playbackRangeGhostEndHandle.style.display = DisplayStyle.Flex;
         }
 
         private void SetSnapGuide(float time)
@@ -1232,71 +1766,182 @@ namespace TimboJimboEditor.Sequencer
 
         private void LayoutBlocksInLanes()
         {
-            var packed = TimelineEditorUtility.PackIntoLanes(
-                _blocks,
-                itemStart: block =>
-                {
-                    var isZero = IsZeroDuration(block.Plan);
-                    GetDisplayTiming(block.Plan, out float referenceStart, out float referenceDuration);
-                    var start = isZero ? referenceStart - (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceStart;
-                    start = Mathf.Max(0f, start);
-                    return start;
-                },
-                itemEnd: block =>
-                {
-                    var isZero = IsZeroDuration(block.Plan);
-                    GetDisplayTiming(block.Plan, out float referenceStart, out float referenceDuration);
-                    float referenceEnd = referenceStart + referenceDuration;
-                    var end = isZero ? referenceEnd + (MinDurationPx * 0.5f) / Mathf.Max(_pixelsPerSecond, 0.0001f) : referenceEnd;
-                    end = Mathf.Max(0f, end);
-                    return end;
-                }
-            );
+            _dragDropDraftLane = 0;
 
-            var maxAbsoluteEnd = packed.Count > 0 ? packed.Max(entry => entry.Item.Plan.Timing.AbsoluteEndTime) : 0f;
+            // Pre-compute display timings (including ghosts) for packing
+            var displayTimings = new Dictionary<PlanBlock, (float start, float duration)>();
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                GetDisplayTiming(_blocks[i].Model, out float start, out float duration);
+                displayTimings[_blocks[i]] = (start, duration);
+            }
+
+            var packEntries = new List<(PlanBlock block, Segment segment, float start, float end, bool isDraft)>();
+            for (int i = 0; i < _blocks.Count; i++)
+            {
+                var block = _blocks[i];
+                var (start, duration) = displayTimings[block];
+                packEntries.Add((block, block.Model.Segment, start, start + duration, false));
+            }
+
+            if (_dragDropDraftSegment != null)
+            {
+                packEntries.Add((_blocks.Count > 0 ? null : null, _dragDropDraftSegment, _dragDropDraftStart, _dragDropDraftStart + _dragDropDraftDuration, true));
+            }
+
+            var packed = LanePacker.Pack(
+                items: packEntries,
+                itemToInput: entry =>
+                {
+                    var editor = SegmentBlockEditorRegistry.GetEditor(entry.segment);
+
+                    return new ()
+                    {
+                        Data = entry,
+                        Start = entry.start,
+                        End = entry.end,
+                        Group = editor.GetLanePackerGroup(entry.segment),
+                    };
+                },
+                depenetrateAndCompact: true
+            );
 
             for (int i = 0; i < packed.Count; i++)
             {
                 var item = packed[i];
-                var block = item.Item;
-                var isZero = IsZeroDuration(block.Plan);
+                var entry = item.Item;
+                if (entry.isDraft)
+                {
+                    _dragDropDraftLane = item.Lane;
+                    continue;
+                }
 
-                GetDisplayTiming(block.Plan, out float start, out float duration);
+                var block = entry.block;
+                if (block == null)
+                    continue;
+
+                var (start, duration) = displayTimings[block];
 
                 var top = LaneTop + item.Lane * (LaneHeight + LaneGap);
                 var left = TimeToX(start);
-
                 var width = Mathf.Max(TimeToX(start + duration) - left, MinDurationPx);
-                if (isZero)
-                    left -= width * 0.5f;
 
                 block.Root.style.left = left;
                 block.Root.style.top = top;
                 block.Root.style.width = width;
+                block.Root.style.height = LaneHeight;
                 block.LayoutRect = new Rect(left, top, width, LaneHeight);
             }
 
             UpdateSelectionOutline();
         }
 
-        private void GetDisplayTiming(SegmentPlan plan, out float start, out float duration)
+        private void LayoutZeroDurationMarkers()
         {
-            if (_selectionTransform != null && _selectionTransform.TryGetGhost(plan, out start, out duration))
+            if (_markers.Count == 0)
                 return;
 
-            start = plan.Timing.AbsoluteStartTime;
-            duration = plan.Timing.AbsoluteDuration;
+            // Pre-compute display timings (including ghosts) for all markers
+            var displayTimings = new Dictionary<ZeroDurationMarker, (float time, float displayX)>();
+            for (int i = 0; i < _markers.Count; i++)
+            {
+                var marker = _markers[i];
+                GetDisplayTiming(marker.Model, out float start, out float _);
+                float displayX = TimeToX(start);
+                displayTimings[marker] = (start, displayX);
+            }
+
+            // Sort markers by display time for consistent grouping
+            var sortedMarkers = new List<ZeroDurationMarker>(_markers);
+            sortedMarkers.Sort((a, b) => displayTimings[a].time.CompareTo(displayTimings[b].time));
+
+            // Group markers by spatial proximity (threshold-based): markers within MinDurationPx pixels overlap
+            var markersByGroup = new List<List<ZeroDurationMarker>>();
+            float overlapThreshold = MinDurationPx;
+
+            for (int i = 0; i < sortedMarkers.Count; i++)
+            {
+                var marker = sortedMarkers[i];
+                var (_, markerX) = displayTimings[marker];
+                
+                // Try to find an existing group this marker is close to
+                bool foundGroup = false;
+                for (int g = 0; g < markersByGroup.Count; g++)
+                {
+                    var group = markersByGroup[g];
+                    // Check distance to any marker in this group
+                    bool withinThreshold = false;
+                    for (int j = 0; j < group.Count; j++)
+                    {
+                        var (_, groupMarkerX) = displayTimings[group[j]];
+                        if (Mathf.Abs(markerX - groupMarkerX) <= overlapThreshold)
+                        {
+                            withinThreshold = true;
+                            break;
+                        }
+                    }
+                    
+                    if (withinThreshold)
+                    {
+                        group.Add(marker);
+                        foundGroup = true;
+                        break;
+                    }
+                }
+
+                if (!foundGroup)
+                {
+                    markersByGroup.Add(new List<ZeroDurationMarker> { marker });
+                }
+            }
+
+            // Layout each marker group with vertical distribution
+            for (int g = 0; g < markersByGroup.Count; g++)
+            {
+                var group = markersByGroup[g];
+                int columnCount = group.Count;
+                float markerHeight = MarkerLaneHeight / columnCount;
+
+                for (int i = 0; i < group.Count; i++)
+                {
+                    var marker = group[i];
+                    marker.ColumnIndex = i;
+                    marker.ColumnCount = columnCount;
+
+                    var (_, displayX) = displayTimings[marker];
+                    var minWidth = MinDurationPx;
+                    
+                    // Markers positioned in lane at top, stacked vertically
+                    var itemTop = MarkerLaneTop + i * markerHeight;
+                    var itemLeft = displayX - minWidth * 0.5f;
+
+                    marker.Root.style.left = itemLeft;
+                    marker.Root.style.top = itemTop;
+                    marker.Root.style.width = minWidth;
+                    marker.Root.style.height = markerHeight;
+                    marker.LayoutRect = new Rect(itemLeft, itemTop, minWidth, markerHeight);
+                }
+            }
+
+            UpdateSelectionOutline();
+        }
+
+        private void GetDisplayTiming(SegmentSelectionModel model, out float start, out float duration)
+        {
+            if (_selectionTransform != null && _selectionTransform.TryGetGhost(model, out start, out duration))
+                return;
+
+            start = model.StartTime;
+            duration = model.Duration;
         }
 
         private void RebuildSnapTimes()
         {
             _segmentSnapCandidates.Clear();
-            if (_activeRoot == null)
-                return;
 
             HashSet<int> distinctTimes = new HashSet<int>();
 
-            void AddDistinct(float t, SegmentPlan plan)
+            void AddDistinct(float t)
             {
                 var id = Mathf.RoundToInt(t * 10000f);
                 if (!distinctTimes.Add(id))
@@ -1305,30 +1950,21 @@ namespace TimboJimboEditor.Sequencer
                 _segmentSnapCandidates.Add(new SegmentSnapCandidate(t));
             }
 
-            void Visit(SegmentPlan plan, int depth)
+            for (int i = 0; i < _models.Count; i++)
             {
-                if (plan == null || depth > SnapDepth)
-                    return;
+                var model = _models[i];
+                if (_selection.IsSelected(model))
+                    continue;
 
-                if (_selection.IsSelected(plan))
-                    return;
+                AddDistinct(model.StartTime);
+                AddDistinct(model.EndTime);
 
-                AddDistinct(plan.Timing.AbsoluteStartTime, plan);
-                AddDistinct(plan.Timing.AbsoluteEndTime, plan);
-
-                var children = plan.Children;
-                if (children == null)
-                    return;
-
-                for (int i = 0; i < children.Count; i++)
-                    Visit(children[i], depth + 1);
-            }
-
-            var roots = _activeRoot.Children;
-            if (roots != null)
-            {
-                for (int i = 0; i < roots.Count; i++)
-                    Visit(roots[i], 0);
+                var plan = model.Segment.GetPlan(null);
+                foreach(var childPlan in plan.Children)
+                {
+                    AddDistinct(childPlan.Timing.AbsoluteStartTime);
+                    AddDistinct(childPlan.Timing.AbsoluteEndTime);
+                }
             }
         }
 
@@ -1422,13 +2058,9 @@ namespace TimboJimboEditor.Sequencer
             snappedTime = bestSnapTime;
 
             if (foundKeyframe && bestIsSegmentSnap)
-            {
                 SetSnapGuide(snappedTime);
-            }
             else
-            {
                 HideSnapGuide();
-            }
 
             return true;
         }
@@ -1521,7 +2153,6 @@ namespace TimboJimboEditor.Sequencer
             if (width <= 1f || height <= 1f)
                 return;
 
-            // Ruler background
             painter.fillColor = new Color(0.105f, 0.105f, 0.105f);
             painter.BeginPath();
             painter.MoveTo(new Vector2(0, 0));
@@ -1531,7 +2162,6 @@ namespace TimboJimboEditor.Sequencer
             painter.ClosePath();
             painter.Fill();
 
-            // Timeline body background
             painter.fillColor = new Color(0.145f, 0.145f, 0.145f);
             painter.BeginPath();
             painter.MoveTo(new Vector2(0, RulerHeight));
@@ -1541,9 +2171,19 @@ namespace TimboJimboEditor.Sequencer
             painter.ClosePath();
             painter.Fill();
 
+            // Draw marker lane background
+            painter.fillColor = new Color(0.1f, 0.1f, 0.1f, 0.75f);
+            painter.BeginPath();
+            painter.MoveTo(new Vector2(0, MarkerLaneTop));
+            painter.LineTo(new Vector2(width, MarkerLaneTop));
+            painter.LineTo(new Vector2(width, MarkerLaneTop + MarkerLaneHeight));
+            painter.LineTo(new Vector2(0, MarkerLaneTop + MarkerLaneHeight));
+            painter.ClosePath();
+            painter.Fill();
+
             float maxEnd = 0f;
-            for (int i = 0; i < _activeLayer.Count; i++)
-                maxEnd = Mathf.Max(maxEnd, _activeLayer[i].Timing.AbsoluteEndTime);
+            for (int i = 0; i < _models.Count; i++)
+                maxEnd = Mathf.Max(maxEnd, _models[i].EndTime);
 
             painter.fillColor = new Color(0.09f, 0.09f, 0.09f);
             float x0 = TimeToX(0f);
@@ -1592,7 +2232,6 @@ namespace TimboJimboEditor.Sequencer
                 painter.Stroke();
             }
 
-            // Divider under ruler
             painter.strokeColor = new Color(0f, 0f, 0f, 0.35f);
             painter.lineWidth = 1f;
             painter.BeginPath();
@@ -1623,30 +2262,68 @@ namespace TimboJimboEditor.Sequencer
                 bool clickedRuler = local.y <= RulerHeight;
                 if (clickedRuler)
                 {
-                    SeekRequested?.Invoke(XToTime(local.x));
-                    _scrubbingTimeline = true;
-                    _scrubPointerId = evt.pointerId;
-                    this.CapturePointer(evt.pointerId);
+                    if (TryBeginPlaybackRangeResetSession(local, evt))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
+
+                    if (evt.altKey && TryBeginPlaybackRangeDragSession(local, evt))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
+
+                    if (evt.altKey && TryBeginPlaybackRangeMoveSession(local, evt, requireHitInsideRange: true))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
+
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
+                    BeginPointerSession(new PointerSession
+                    {
+                        Mode = PointerSessionMode.Scrub,
+                        PointerId = evt.pointerId,
+                        PointerStartWorld = evt.position,
+                        PointerStartLocal = local,
+                    });
                     evt.StopPropagation();
                     return;
                 }
 
-                if (ArmSelectionTransformFromPointer(evt.position, evt.pointerId))
+                if (TryGetSelectionTransformStart(evt.position, out _, out _, out _))
+                {
+                    BeginPointerSession(new PointerSession
+                    {
+                        Mode = PointerSessionMode.SelectionPress,
+                        PointerId = evt.pointerId,
+                        PointerStartWorld = evt.position,
+                        PointerStartLocal = local,
+                    });
+                    evt.StopPropagation();
+                    return;
+                }
+
+                if (evt.altKey && TryBeginPlaybackRangeMoveSession(local, evt, requireHitInsideRange: false))
                 {
                     evt.StopPropagation();
                     return;
                 }
 
-                _marqueeArmed = true;
-                _marqueeSelecting = false;
-                _marqueePointerId = evt.pointerId;
-                _marqueeStartLocal = local;
-                _marqueeMode = evt.shiftKey
-                    ? MarqueeMode.Additive
-                    : (evt.ctrlKey || evt.commandKey)
-                        ? MarqueeMode.Subtractive
-                        : MarqueeMode.Replace;
-                this.CapturePointer(evt.pointerId);
+                BeginPointerSession(new PointerSession
+                {
+                    Mode = PointerSessionMode.BackgroundPress,
+                    PointerId = evt.pointerId,
+                    PointerStartWorld = evt.position,
+                    PointerStartLocal = local,
+                    MarqueeMode = evt.shiftKey
+                        ? MarqueeMode.Additive
+                        : (evt.ctrlKey || evt.commandKey)
+                            ? MarqueeMode.Subtractive
+                            : MarqueeMode.Replace,
+                });
 
                 evt.StopPropagation();
                 return;
@@ -1655,247 +2332,292 @@ namespace TimboJimboEditor.Sequencer
             if (evt.button != 1 && evt.button != 2)
                 return;
 
-            _panning = true;
-            _panStartPointer = evt.position;
-            _panStartView = _viewStart;
-            this.CapturePointer(evt.pointerId);
+            BeginPointerSession(new PointerSession
+            {
+                Mode = PointerSessionMode.Pan,
+                PointerId = evt.pointerId,
+                PointerStartWorld = evt.position,
+                PointerStartLocal = this.WorldToLocal(evt.position),
+                PanStartPointer = evt.position,
+                PanStartView = _viewStart,
+            });
             evt.StopPropagation();
         }
 
         private void OnPointerMove(PointerMoveEvent evt)
         {
-            if (_marqueeArmed && _marqueePointerId == evt.pointerId && this.HasPointerCapture(evt.pointerId))
-            {
-                var local = this.WorldToLocal(evt.position);
+            if (_pointerSession == null || _pointerSession.PointerId != evt.pointerId || !this.HasPointerCapture(evt.pointerId))
+                return;
 
-                if (!_marqueeSelecting)
+            switch (_pointerSession.Mode)
+            {
+                case PointerSessionMode.BackgroundPress:
                 {
-                    if ((local - _marqueeStartLocal).sqrMagnitude < 9f)
+                    var local = this.WorldToLocal(evt.position);
+
+                    if ((local - _pointerSession.PointerStartLocal).sqrMagnitude < 9f)
                     {
                         evt.StopPropagation();
                         return;
                     }
 
-                    _marqueeSelecting = true;
-                    _selection.BeginMarquee(_marqueeMode);
+                    _pointerSession.Mode = PointerSessionMode.Marquee;
+                    _selection.BeginMarquee(_pointerSession.MarqueeMode);
                     _marqueeBox.style.display = DisplayStyle.Flex;
-                }
 
-                var rect = UpdateMarqueeBoxRect(local);
-                var hits = CollectMarqueeHits(rect);
-                _selection.UpdateMarquee(hits);
-                RefreshSelectionVisuals();
-                SelectionChanged?.Invoke(_selection.ActiveSelection);
+                    var rect = UpdateMarqueeBoxRect(local);
+                    var hits = CollectMarqueeHits(rect);
+                    _selection.UpdateMarquee(hits);
+                    RefreshSelectionVisuals();
 
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_scrubbingTimeline && _scrubPointerId == evt.pointerId && this.HasPointerCapture(evt.pointerId))
-            {
-                var local = this.WorldToLocal(evt.position);
-                SeekRequested?.Invoke(XToTime(local.x));
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_selectionTransformArmed && _selectionTransformArmPointerId == evt.pointerId && this.HasPointerCapture(evt.pointerId))
-            {
-                float thresholdSq = TransformDragThresholdPx * TransformDragThresholdPx;
-                var pointerPos = new Vector2(evt.position.x, evt.position.y);
-                float dragSq = (pointerPos - _selectionTransformArmStartWorld).sqrMagnitude;
-                if (dragSq < thresholdSq)
-                {
                     evt.StopPropagation();
                     return;
                 }
 
-                if (TryBeginSelectionTransformFromPointer(_selectionTransformArmStartWorld, evt.pointerId))
-                    RebuildSnapTimes();
-
-                ClearSelectionTransformArm();
-            }
-
-            if (IsDraggingSelection && _selectionTransform.PointerId == evt.pointerId)
-            {
-                float dx = evt.position.x - _selectionTransform.PointerStart.x;
-                float dt = dx / Mathf.Max(_pixelsPerSecond, 0.0001f);
-
-                bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
-                if (shouldSnap && TryGetSnapAdjustedDelta(_selectionTransform.Kind, dt, out var snappedDt, out _))
-                {
-                    dt = snappedDt;
-                }
-                else
-                {
-                    HideSnapGuide();
-                }
-
-                _selectionTransform.UpdateGhost(dt);
-
-                LayoutBlocksInLanes();
-
-                evt.StopPropagation();
-                return;
-            }
-
-            if (!_panning || !this.HasPointerCapture(evt.pointerId))
-                return;
-
-            float panDx = evt.position.x - _panStartPointer.x;
-            _viewStart = _panStartView - panDx / Mathf.Max(_pixelsPerSecond, 0.0001f);
-            RefreshLayout();
-            evt.StopPropagation();
-        }
-
-        private void OnPointerUp(PointerUpEvent evt)
-        {
-            if (_marqueeArmed && _marqueePointerId == evt.pointerId)
-            {
-                if (_marqueeSelecting)
+                case PointerSessionMode.Marquee:
                 {
                     var local = this.WorldToLocal(evt.position);
                     var rect = UpdateMarqueeBoxRect(local);
                     var hits = CollectMarqueeHits(rect);
                     _selection.UpdateMarquee(hits);
-                    _selection.EndMarquee(commit: true);
-                    RebuildSnapTimes();
                     RefreshSelectionVisuals();
-                    SelectionChanged?.Invoke(_selection.ActiveSelection);
-                }
-                else if (_marqueeMode == MarqueeMode.Replace)
-                {
-                    _selection.Clear();
-                    RebuildSnapTimes();
-                    RefreshSelectionVisuals();
-                    SelectionChanged?.Invoke(_selection.ActiveSelection);
+
+                    evt.StopPropagation();
+                    return;
                 }
 
-                _marqueeArmed = false;
-                _marqueeSelecting = false;
-                _marqueePointerId = -1;
-                _marqueeBox.style.display = DisplayStyle.None;
-
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_pendingSelectedClickBlock != null && _pendingSelectedClickPointerId == evt.pointerId)
-            {
-                bool hadTransformSession = IsDraggingSelection && _selectionTransform.PointerId == evt.pointerId;
-                bool commitTransform = hadTransformSession && _selectionTransform.HasChanges;
-                bool suppressClickSelection = hadTransformSession;
-
-                if (commitTransform)
+                case PointerSessionMode.Scrub:
                 {
-                    var changes = new List<(SegmentPlan plan, float start, float duration)>();
-                    _selectionTransform.GetCommittedChanges(changes);
-                    for (int i = 0; i < changes.Count; i++)
+                    var local = this.WorldToLocal(evt.position);
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.PlaybackRangeStartDrag:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    float time = SnapPlaybackTime(XToTime(local.x), shouldSnap);
+                    float baseEnd = _pointerSession.RangeEndAtPress;
+                    float clampedStart = Mathf.Clamp(time, 0f, baseEnd - MinPlaybackRangeDuration);
+                    UpdatePlaybackRangeGhost(clampedStart, baseEnd, notify: true);
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.PlaybackRangeEndDrag:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    float time = SnapPlaybackTime(XToTime(local.x), shouldSnap);
+                    float baseStart = _pointerSession.RangeStartAtPress;
+                    float clampedEnd = Mathf.Max(baseStart + MinPlaybackRangeDuration, time);
+                    UpdatePlaybackRangeGhost(baseStart, clampedEnd, notify: true);
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.PlaybackRangeMoveDrag:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    float rangeDuration = Mathf.Max(MinPlaybackRangeDuration, _pointerSession.RangeEndAtPress - _pointerSession.RangeStartAtPress);
+                    float dt = (local.x - _pointerSession.PointerStartLocal.x) / Mathf.Max(_pixelsPerSecond, 0.0001f);
+                    float movedStart = _pointerSession.RangeStartAtPress + dt;
+
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    if (shouldSnap)
+                        movedStart = SnapPlaybackTime(movedStart, true);
+                    else
+                        HideSnapGuide();
+
+                    var sequenceDuration = Mathf.Max(0f, _models.Count > 0 ? _models.Max(m => m.EndTime) : 0f);
+                    movedStart = Mathf.Clamp(movedStart, 0f, sequenceDuration - rangeDuration);
+ 
+                    UpdatePlaybackRangeGhost(movedStart, movedStart + rangeDuration, notify: true);
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.SelectionPress:
+                    if (!HasExceededDragThreshold(_pointerSession, evt.position))
                     {
-                        var change = changes[i];
-                        TimeAdjustmentCommitted?.Invoke(change.plan, change.start, change.duration);
+                        evt.StopPropagation();
+                        return;
                     }
+
+                    TryBeginSelectionTransformSession(_pointerSession.PointerStartWorld, evt.pointerId, evt.altKey);
+
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.BlockPress:
+                    if (!HasExceededDragThreshold(_pointerSession, evt.position))
+                    {
+                        evt.StopPropagation();
+                        return;
+                    }
+
+                    if (_pointerSession.BlockWasSelected || (!_pointerSession.Shift && !_pointerSession.Action))
+                    {
+                        TryBeginSelectionTransformSession(_pointerSession.PointerStartWorld, evt.pointerId, evt.altKey);
+                    }
+
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.Transform:
+                case PointerSessionMode.TransformSmear:
+                {
+                    float dx = evt.position.x - _selectionTransform.PointerStart.x;
+                    float dt = dx / Mathf.Max(_pixelsPerSecond, 0.0001f);
+
+                    bool useSmear = _pointerSession.Mode == PointerSessionMode.TransformSmear;
+
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    if (!useSmear && shouldSnap && TryGetSnapAdjustedDelta(_selectionTransform.Kind, dt, out var snappedDt, out _))
+                    {
+                        dt = snappedDt;
+                    }
+                    else
+                    {
+                        HideSnapGuide();
+                    }
+
+                    if (useSmear)
+                        _selectionTransform.UpdateSmear(dt);
+                    else
+                        _selectionTransform.UpdateLinear(dt);
+
+                    LayoutBlocksInLanes();
+                    LayoutZeroDurationMarkers();
+                    MarkDirtyRepaint();
+
+                    evt.StopPropagation();
+                    return;
                 }
 
-                if (hadTransformSession)
+                case PointerSessionMode.Pan:
                 {
+                    float panDx = evt.position.x - _pointerSession.PanStartPointer.x;
+                    _viewStart = _pointerSession.PanStartView - panDx / Mathf.Max(_pixelsPerSecond, 0.0001f);
+                    RefreshLayout();
+                    evt.StopPropagation();
+                    return;
+                }
+            }
+        }
+
+        private void OnPointerUp(PointerUpEvent evt)
+        {
+            if (_pointerSession == null || _pointerSession.PointerId != evt.pointerId)
+                return;
+
+            switch (_pointerSession.Mode)
+            {
+                case PointerSessionMode.Marquee:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    var rect = UpdateMarqueeBoxRect(local);
+                    var hits = CollectMarqueeHits(rect);
+                    _selection.UpdateMarquee(hits);
+                    
+                    var targetSelection = _selection.BuildCommittedMarqueeSelection();
+                    _selection.EndMarquee();
+                    SelectionChanged?.Invoke(targetSelection);
+                    _marqueeBox.style.display = DisplayStyle.None;
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.BackgroundPress:
+                    if (_pointerSession.MarqueeMode == MarqueeMode.Replace)
+                        SelectionChanged?.Invoke(Array.Empty<SegmentSelectionModel>());
+
+                    _marqueeBox.style.display = DisplayStyle.None;
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.BlockPress:
+                    if (_pointerSession.BlockWasSelected)
+                        RequestBlockClickSelection(_pointerSession.PressedBlock, _pointerSession.Shift, _pointerSession.Action);
+
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.SelectionPress:
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+
+                case PointerSessionMode.Scrub:
+                {
+                    var local = this.WorldToLocal(evt.position);
+                    bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+                    SeekRequested?.Invoke(SnapPlaybackTime(XToTime(local.x), shouldSnap));
+                    HideSnapGuide();
+
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.PlaybackRangeStartDrag:
+                case PointerSessionMode.PlaybackRangeEndDrag:
+                case PointerSessionMode.PlaybackRangeMoveDrag:
+                {
+                    if (_showPlaybackRangeGhost)
+                    {
+                        _playbackRangeStart = _playbackRangeGhostStart;
+                        _playbackRangeEnd = _playbackRangeGhostEnd;
+                        PlaybackRangeChanged?.Invoke(_playbackRangeStart, _playbackRangeEnd);
+                    }
+
+                    EndPlaybackRangeGhostSession(notifyEnded: true);
+                    HideSnapGuide();
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
+                }
+
+                case PointerSessionMode.Transform:
+                case PointerSessionMode.TransformSmear:
+                {
+                    if (_selectionTransform.HasChanges)
+                    {
+                        var changes = new List<(SegmentSelectionModel model, float start, float duration)>();
+                        _selectionTransform.GetCommittedChanges(changes);
+                        TimeAdjustmentCommitted?.Invoke(changes);
+                    }
+
                     _selectionTransform = null;
                     HideSnapGuide();
                     RefreshLayout();
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
                 }
 
-                if (_selectionTransformArmed && _selectionTransformArmPointerId == evt.pointerId)
-                    ClearSelectionTransformArm();
-
-                var pendingBlock = _pendingSelectedClickBlock;
-                var pendingShift = _pendingSelectedClickShift;
-                var pendingAction = _pendingSelectedClickAction;
-                _pendingSelectedClickBlock = null;
-                _pendingSelectedClickPointerId = -1;
-                _pendingSelectedClickShift = false;
-                _pendingSelectedClickAction = false;
-
-                if (!suppressClickSelection)
-                    HandleBlockSelectionClick(pendingBlock, pendingShift, pendingAction);
-
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_selectionTransformArmed && _selectionTransformArmPointerId == evt.pointerId)
-            {
-                ClearSelectionTransformArm();
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-                evt.StopPropagation();
-                return;
-            }
-
-            if (_scrubbingTimeline && _scrubPointerId == evt.pointerId)
-            {
-                var local = this.WorldToLocal(evt.position);
-                bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
-                SeekRequested?.Invoke(SnapTime(XToTime(local.x), shouldSnap));
-                
-                _scrubbingTimeline = false;
-                _scrubPointerId = -1;
-                
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-                evt.StopPropagation();
-                return;
-            }
-
-            if (IsDraggingSelection && _selectionTransform.PointerId == evt.pointerId)
-            {
-                if (_selectionTransform.HasChanges)
+                case PointerSessionMode.Pan:
                 {
-                    var changes = new List<(SegmentPlan plan, float start, float duration)>();
-                    _selectionTransform.GetCommittedChanges(changes);
-                    for (int i = 0; i < changes.Count; i++)
-                    {
-                        var change = changes[i];
-                        TimeAdjustmentCommitted?.Invoke(change.plan, change.start, change.duration);
-                    }
+                    EndPointerSession();
+                    evt.StopPropagation();
+                    return;
                 }
-
-                _selectionTransform = null;
-                HideSnapGuide();
-                if (_pendingSelectedClickPointerId == evt.pointerId)
-                {
-                    _pendingSelectedClickBlock = null;
-                    _pendingSelectedClickPointerId = -1;
-                    _pendingSelectedClickShift = false;
-                    _pendingSelectedClickAction = false;
-                }
-                if (this.HasPointerCapture(evt.pointerId))
-                    this.ReleasePointer(evt.pointerId);
-                RefreshLayout();
-                evt.StopPropagation();
-                return;
             }
-
-            if (!_panning || !this.HasPointerCapture(evt.pointerId))
-                return;
-
-            _panning = false;
-            this.ReleasePointer(evt.pointerId);
-            evt.StopPropagation();
         }
 
         private void OnKeyDown(KeyDownEvent evt)
         {
             if (evt.keyCode == KeyCode.Delete || evt.keyCode == KeyCode.Backspace)
             {
-                if (_selection.ActiveSelection.Count > 0)
+                if (_selection.EffectiveSelection.Count > 0)
                 {
-                    DeleteRequested?.Invoke(_selection.ActiveSelection);
+                    DeleteRequested?.Invoke(_selection.EffectiveSelection);
                     evt.StopPropagation();
                 }
                 return;
@@ -1903,11 +2625,8 @@ namespace TimboJimboEditor.Sequencer
 
             if ((evt.ctrlKey || evt.commandKey) && evt.keyCode == KeyCode.C)
             {
-                if (_selection.ActiveSelection.Count > 0)
-                {
+                if (_selection.EffectiveSelection.Count > 0)
                     CopyRequested?.Invoke();
-                    evt.StopPropagation();
-                }
                 return;
             }
 
@@ -1920,7 +2639,8 @@ namespace TimboJimboEditor.Sequencer
 
             if (evt.keyCode == KeyCode.F)
             {
-                if (_selection.ActiveSelection.Count > 0)
+                bool hasSelection = _selection.EffectiveSelection.Count > 0;
+                if (hasSelection && !IsAllDisplayedModelsSelected())
                     FrameSelection();
                 else
                     FrameAllInternal();
@@ -1930,51 +2650,257 @@ namespace TimboJimboEditor.Sequencer
             }
         }
 
-        private void FrameSelection()
+        private void OnDragUpdated(DragUpdatedEvent evt)
         {
-            float width = resolvedStyle.width;
-            if (float.IsNaN(width) || width < 10f || _selection.ActiveSelection.Count == 0)
-                return;
+            var local = this.WorldToLocal(evt.mousePosition);
+            bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+            float time = SnapPlaybackTime(XToTime(local.x), shouldSnap);
 
-            float start = float.MaxValue;
-            float end = float.MinValue;
-
-            var selection = _selection.ActiveSelection;
-            for (int i = 0; i < selection.Count; i++)
+            if (TryResolveDropDraft(time, out var draftSegment))
             {
-                start = Mathf.Min(start, selection[i].Timing.AbsoluteStartTime);
-                end = Mathf.Max(end, selection[i].Timing.AbsoluteEndTime);
+                UpdateDropDraftPreview(draftSegment, time);
+                DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+                evt.StopPropagation();
+                return;
             }
 
-            if (start == float.MaxValue || end == float.MinValue)
+            ClearDropDraftPreview();
+            DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
+        }
+
+        private void OnDragPerform(DragPerformEvent evt)
+        {
+            var local = this.WorldToLocal(evt.mousePosition);
+            bool shouldSnap = (evt.ctrlKey || evt.commandKey) || Snap;
+            float time = SnapPlaybackTime(XToTime(local.x), shouldSnap);
+
+            if (!TryResolveDropDraft(time, out var draftSegment))
+            {
+                ClearDropDraftPreview();
+                DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
+                return;
+            }
+
+            UpdateDropDraftPreview(draftSegment, time);
+
+            DragAndDrop.AcceptDrag();
+            DropSegmentRequested?.Invoke(CloneSegment(_dragDropDraftSegment));
+            ClearDropDraftPreview();
+            evt.StopPropagation();
+        }
+
+        private bool TryResolveDropDraft(float time, out Segment resolvedSegment)
+        {
+            resolvedSegment = null;
+
+            if (!TryResolveDraggedGameObjects(DragAndDrop.objectReferences, out var draggedGameObjects))
+                return false;
+
+            var context = new TimelineDragDropResolveContext(
+                _dropTargetProvider,
+                _dropTargetSequenceName,
+                draggedGameObjects,
+                Mathf.Max(0f, time));
+
+            if (!TimelineDragDropResolverRegistry.TryResolve(context, out var result) || result.Segment == null)
+                return false;
+
+            resolvedSegment = result.Segment;
+            return true;
+        }
+
+        private static bool TryResolveDraggedGameObjects(IReadOnlyList<UnityEngine.Object> draggedObjects, out List<GameObject> draggedGameObjects)
+        {
+            draggedGameObjects = null;
+
+            if (draggedObjects == null || draggedObjects.Count == 0)
+                return false;
+
+            draggedGameObjects = new List<GameObject>(draggedObjects.Count);
+            for (int i = 0; i < draggedObjects.Count; i++)
+            {
+                var draggedObject = draggedObjects[i];
+                switch (draggedObject)
+                {
+                    case GameObject go:
+                        draggedGameObjects.Add(go);
+                        break;
+                    case Component component:
+                        draggedGameObjects.Add(component.gameObject);
+                        break;
+                    default:
+                        draggedGameObjects = null;
+                        return false;
+                }
+            }
+
+            return draggedGameObjects.Count > 0;
+        }
+
+        private void UpdateDropDraftPreview(Segment segment, float startTime)
+        {
+            if (_dragDropDraftPreview == null || segment == null)
                 return;
 
-            float duration = end - start;
+            _dragDropDraftSegment = segment;
+            _dragDropDraftStart = Mathf.Max(0f, startTime);
+            if (_dragDropDraftSegment is IStartTimeConfigurable startConfig)
+                startConfig.SetStartTime(_dragDropDraftStart);
 
-            float padding = Mathf.Max(duration * 0.5f, 0.5f);
-            float viewStart = Mathf.Max(0f, start - padding);
-            float viewEnd = end + padding;
+            var plan = _dragDropDraftSegment.GetPlan(null);
+            _dragDropDraftDuration = plan != null
+                ? Mathf.Max(0f, plan.Timing.AbsoluteDuration)
+                : 0f;
 
-            float contentWidth = Mathf.Max(width - HorizontalPadding * 2f, 10f);
-            _pixelsPerSecond = Mathf.Clamp(contentWidth / Mathf.Max(viewEnd - viewStart, 0.5f), MinZoom, MaxZoom);
-            _viewStart = viewStart;
+            var previewEditor = SegmentBlockEditorRegistry.GetEditor(_dragDropDraftSegment);
+            var (fill, border) = previewEditor.GetBlockColors(_dragDropDraftSegment);
+            fill.a *= 0.65f;
+            border.a *= 0.85f;
+
+            _dragDropDraftPreview.Clear();
+            _dragDropDraftPreview.style.display = DisplayStyle.Flex;
+            _dragDropDraftPreview.style.backgroundColor = fill;
+            _dragDropDraftPreview.style.borderTopColor = border;
+            _dragDropDraftPreview.style.borderBottomColor = border;
+            _dragDropDraftPreview.style.borderLeftColor = border;
+            _dragDropDraftPreview.style.borderRightColor = border;
+            _dragDropDraftPreview.style.borderTopWidth = 1f;
+            _dragDropDraftPreview.style.borderBottomWidth = 1f;
+            _dragDropDraftPreview.style.borderLeftWidth = 1f;
+            _dragDropDraftPreview.style.borderRightWidth = 1f;
+            _dragDropDraftPreview.style.borderTopLeftRadius = 4f;
+            _dragDropDraftPreview.style.borderTopRightRadius = 4f;
+            _dragDropDraftPreview.style.borderBottomLeftRadius = 4f;
+            _dragDropDraftPreview.style.borderBottomRightRadius = 4f;
+
+            previewEditor.OnBlockGUI(_dragDropDraftSegment, _dragDropDraftPreview);
+
+            var addBadge = new Label("+")
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    right = 4f,
+                    top = 4f,
+                    width = 14f,
+                    height = 14f,
+                    borderTopLeftRadius = 7f,
+                    borderTopRightRadius = 7f,
+                    borderBottomLeftRadius = 7f,
+                    borderBottomRightRadius = 7f,
+                    unityTextAlign = TextAnchor.MiddleCenter,
+                    backgroundColor = new Color(0f, 0f, 0f, 0.4f),
+                    color = new Color(1f, 1f, 1f, 0.95f),
+                    unityFontStyleAndWeight = FontStyle.Bold,
+                    fontSize = 10,
+                },
+                pickingMode = PickingMode.Ignore,
+            };
+            _dragDropDraftPreview.Add(addBadge);
+
+            RefreshLayout();
         }
+
+        private void LayoutDropDraftPreview()
+        {
+            if (_dragDropDraftPreview == null || _dragDropDraftSegment == null)
+                return;
+
+            float left = TimeToX(_dragDropDraftStart);
+            float width = Mathf.Max(TimeToX(_dragDropDraftStart + _dragDropDraftDuration) - left, MinDurationPx);
+            float top = LaneTop + _dragDropDraftLane * (LaneHeight + LaneGap);
+
+            _dragDropDraftPreview.style.left = left;
+            _dragDropDraftPreview.style.top = top;
+            _dragDropDraftPreview.style.width = width;
+            _dragDropDraftPreview.style.height = LaneHeight;
+        }
+
+        private void ClearDropDraftPreview()
+        {
+            bool hadDraft = _dragDropDraftSegment != null;
+            _dragDropDraftSegment = null;
+            _dragDropDraftStart = 0f;
+            _dragDropDraftDuration = 0f;
+            _dragDropDraftLane = 0;
+
+            if (_dragDropDraftPreview != null)
+                _dragDropDraftPreview.style.display = DisplayStyle.None;
+
+            if (hadDraft)
+                RefreshLayout();
+        }
+
+        private static Segment CloneSegment(Segment source)
+        {
+            if (source == null)
+                return null;
+
+            return JsonUtility.FromJson(JsonUtility.ToJson(source), source.GetType()) as Segment;
+        }
+
+        private bool IsAllDisplayedModelsSelected()
+        {
+            if (_models.Count == 0)
+                return false;
+
+            if (_selection.EffectiveSelection.Count != _models.Count)
+                return false;
+
+            for (int i = 0; i < _models.Count; i++)
+            {
+                if (!_selection.IsSelected(_models[i]))
+                    return false;
+            }
+
+            return true;
+        }
+
 
         private void BuildContextMenu(ContextualMenuPopulateEvent evt)
         {
-            var hit = FindBlockAt(evt);
+            var hitModel = FindModelAt(evt);
+            int selectionCount = _selection.EffectiveSelection.Count;
 
-            if (hit != null || _selection.ActiveSelection.Count > 0)
+            if (selectionCount > 1)
             {
-                evt.menu.AppendAction(_selection.ActiveSelection.Count > 0 ? "Delete Selection" : "Delete Segment", _ =>
+                evt.menu.AppendAction("Arrange/Stack End-to-End", _ => StackSelectionRequested?.Invoke());
+                evt.menu.AppendAction("Arrange/Align Starts", _ => AlignSelectionStartsRequested?.Invoke());
+                evt.menu.AppendAction("Arrange/Align Ends", _ => AlignSelectionEndsRequested?.Invoke());
+                evt.menu.AppendSeparator();
+            }
+
+            if (hitModel != null || selectionCount > 0)
+            {
+                evt.menu.AppendAction(selectionCount > 0 ? "Delete Selection" : "Delete Segment", _ =>
                 {
-                    var selected = _selection.ActiveSelection;
+                    var selected = _selection.EffectiveSelection;
                     if (selected.Count > 0)
                         DeleteRequested?.Invoke(selected);
                     else
-                        DeleteRequested?.Invoke(new[] { hit.Plan });
+                        DeleteRequested?.Invoke(new[] { hitModel });
                 });
                 evt.menu.AppendSeparator();
+
+                var convertTargets = selectionCount > 0
+                    ? new List<SegmentSelectionModel>(_selection.EffectiveSelection)
+                    : new List<SegmentSelectionModel> { hitModel };
+
+                var convertSegments = convertTargets
+                    .Where(m => m != null && m.Segment != null)
+                    .Select(m => m.Segment)
+                    .ToList();
+
+                var converters = Converters.SegmentConverterRegistry.GetConvertersFor(convertSegments);
+                if (converters.Count > 0)
+                {
+                    for (int i = 0; i < converters.Count; i++)
+                    {
+                        var converter = converters[i];
+                        evt.menu.AppendAction($"Convert To/{converter.MenuName}", _ => ConvertRequested?.Invoke(convertTargets, converter));
+                    }
+                    evt.menu.AppendSeparator();
+                }
             }
 
             var addable = AddableSegmentTypeRegistry.AddableSegmentTypes;
@@ -1983,7 +2909,7 @@ namespace TimboJimboEditor.Sequencer
                 return;
 
             var local = this.WorldToLocal(evt.mousePosition);
-            float addTime = SnapTime(XToTime(local.x), shouldSnap: false);
+            float addTime = SnapPlaybackTime(XToTime(local.x), shouldSnap: false);
             for (int i = 0; i < addable.Count; i++)
             {
                 var addableEntry = addable[i];
@@ -2002,10 +2928,32 @@ namespace TimboJimboEditor.Sequencer
             return null;
         }
 
+        private SegmentSelectionModel FindModelAt(IMouseEvent evt)
+        {
+            // Check blocks first (more likely to be hit)
+            for (int i = _blocks.Count - 1; i >= 0; i--)
+            {
+                var blockLocal = _blocks[i].Root.WorldToLocal(evt.mousePosition);
+                if (_blocks[i].Root.contentRect.Contains(blockLocal)) 
+                    return _blocks[i].Model;
+            }
+
+            // Then check markers
+            for (int i = _markers.Count - 1; i >= 0; i--)
+            {
+                var markerLocal = _markers[i].Root.WorldToLocal(evt.mousePosition);
+                if (_markers[i].Root.contentRect.Contains(markerLocal)) 
+                    return _markers[i].Model;
+            }
+
+            return null;
+        }
+
         private Rect UpdateMarqueeBoxRect(Vector2 currentLocal)
         {
-            var min = Vector2.Min(_marqueeStartLocal, currentLocal);
-            var max = Vector2.Max(_marqueeStartLocal, currentLocal);
+            var startLocal = _pointerSession != null ? _pointerSession.PointerStartLocal : currentLocal;
+            var min = Vector2.Min(startLocal, currentLocal);
+            var max = Vector2.Max(startLocal, currentLocal);
 
             _marqueeBox.style.left = min.x;
             _marqueeBox.style.top = min.y;
@@ -2015,23 +2963,42 @@ namespace TimboJimboEditor.Sequencer
             return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
         }
 
-        private List<SegmentPlan> CollectMarqueeHits(Rect marqueeLocal)
+        private List<SegmentSelectionModel> CollectMarqueeHits(Rect marqueeLocal)
         {
-            var hits = new List<SegmentPlan>();
+            var hits = new List<SegmentSelectionModel>();
 
             for (int i = 0; i < _blocks.Count; i++)
             {
                 if (_blocks[i].LayoutRect.Overlaps(marqueeLocal))
-                    hits.Add(_blocks[i].Plan);
+                    hits.Add(_blocks[i].Model);
+            }
+
+            for (int i = 0; i < _markers.Count; i++)
+            {
+                if (_markers[i].LayoutRect.Overlaps(marqueeLocal))
+                    hits.Add(_markers[i].Model);
             }
 
             return hits;
         }
 
-        private float SnapTime(float time, bool shouldSnap)
+        private float SnapPlaybackTime(float time, bool shouldSnap)
         {
             if (!shouldSnap)
+            {
+                HideSnapGuide();
                 return time;
+            }
+
+            float thresholdTime = SnapThresholdPx / Mathf.Max(_pixelsPerSecond, 0.0001f);
+
+            if (TryFindNearestPlayheadSnapTime(time, thresholdTime, out float pointSnappedTime))
+            {
+                SetSnapGuide(pointSnappedTime);
+                return pointSnappedTime;
+            }
+
+            HideSnapGuide();
 
             float increment = MajorTickStep() * 0.25f;
             if (increment <= 0f)
@@ -2039,15 +3006,199 @@ namespace TimboJimboEditor.Sequencer
             return Mathf.Round(time / increment) * increment;
         }
 
-        private static (Color fill, Color border) GetBlockColors(SegmentPlan segment)
+        private bool TryFindNearestPlayheadSnapTime(float time, float threshold, out float snappedTime)
         {
-            var editor = SegmentEditorRegistry.GetEditor(segment.Segment);
-            return editor.GetBlockColors(segment.Segment);
+            snappedTime = 0f;
+            float bestAbs = float.MaxValue;
+
+            for (int i = 0; i < _segmentSnapCandidates.Count; i++)
+            {
+                float candidateTime = _segmentSnapCandidates[i].Time;
+                float d = candidateTime - time;
+                float abs = Mathf.Abs(d);
+                if (abs <= threshold && abs < bestAbs)
+                {
+                    bestAbs = abs;
+                    snappedTime = candidateTime;
+                }
+            }
+
+            var selected = _selection.EffectiveSelection;
+            for (int i = 0; i < selected.Count; i++)
+            {
+                var model = selected[i];
+                if (model == null)
+                    continue;
+
+                {
+                    float candidateTime = model.StartTime;
+                    float d = candidateTime - time;
+                    float abs = Mathf.Abs(d);
+                    if (abs <= threshold && abs < bestAbs)
+                    {
+                        bestAbs = abs;
+                        snappedTime = candidateTime;
+                    }
+                }
+
+                {
+                    float candidateTime = model.EndTime;
+                    float d = candidateTime - time;
+                    float abs = Mathf.Abs(d);
+                    if (abs <= threshold && abs < bestAbs)
+                    {
+                        bestAbs = abs;
+                        snappedTime = candidateTime;
+                    }
+                }
+
+                var plan = model.Segment.GetPlan(null);
+                foreach (var childPlan in plan.Children)
+                {
+                    {
+                        float candidateTime = childPlan.Timing.AbsoluteStartTime;
+                        float d = candidateTime - time;
+                        float abs = Mathf.Abs(d);
+                        if (abs <= threshold && abs < bestAbs)
+                        {
+                            bestAbs = abs;
+                            snappedTime = candidateTime;
+                        }
+                    }
+
+                    {
+                        float candidateTime = childPlan.Timing.AbsoluteEndTime;
+                        float d = candidateTime - time;
+                        float abs = Mathf.Abs(d);
+                        if (abs <= threshold && abs < bestAbs)
+                        {
+                            bestAbs = abs;
+                            snappedTime = candidateTime;
+                        }
+                    }
+                }
+            }
+
+            return bestAbs != float.MaxValue;
         }
 
-        private static bool IsZeroDuration(SegmentPlan plan) => plan.Timing.AbsoluteDuration < 0.0001f;
+        private static bool IsZeroDuration(SegmentSelectionModel model) => model.Duration < 0.0001f;
 
-        private void DrawZeroDurationMarker(MeshGenerationContext ctx, SegmentPlan plan, VisualElement root)
+        private bool TryBeginPlaybackRangeResetSession(Vector2 local, PointerDownEvent evt)
+        {
+            if (!_showPlaybackRange)
+                return false;
+                
+            // if clicked anywhere in the playback range area with shift clicked, reset it
+            float startX = TimeToX(_playbackRangeStart);
+            float endX = TimeToX(_playbackRangeEnd);
+            if (local.x >= startX && local.x <= endX && evt.shiftKey)
+            {
+                PlaybackRangeResetRequested?.Invoke();
+                EndPlaybackRangeGhostSession(notifyEnded: true);
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryBeginPlaybackRangeDragSession(Vector2 local, PointerDownEvent evt)
+        {
+            if (!_showPlaybackRange)
+                return false;
+
+            float startX = TimeToX(_playbackRangeStart);
+            float endX = TimeToX(_playbackRangeEnd);
+            float threshold = PlaybackRangeHandlePx;
+
+            if (Mathf.Abs(local.x - startX) <= threshold)
+            {
+                BeginPointerSession(new PointerSession
+                {
+                    Mode = PointerSessionMode.PlaybackRangeStartDrag,
+                    PointerId = evt.pointerId,
+                    PointerStartWorld = evt.position,
+                    PointerStartLocal = local,
+                    RangeStartAtPress = _playbackRangeStart,
+                    RangeEndAtPress = _playbackRangeEnd,
+                });
+                BeginPlaybackRangeGhostSession();
+                return true;
+            }
+
+            if (Mathf.Abs(local.x - endX) <= threshold)
+            {
+                BeginPointerSession(new PointerSession
+                {
+                    Mode = PointerSessionMode.PlaybackRangeEndDrag,
+                    PointerId = evt.pointerId,
+                    PointerStartWorld = evt.position,
+                    PointerStartLocal = local,
+                    RangeStartAtPress = _playbackRangeStart,
+                    RangeEndAtPress = _playbackRangeEnd,
+                });
+                BeginPlaybackRangeGhostSession();
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryBeginPlaybackRangeMoveSession(Vector2 local, PointerDownEvent evt, bool requireHitInsideRange)
+        {
+            if (!_showPlaybackRange)
+                return false;
+
+            float startX = TimeToX(_playbackRangeStart);
+            float endX = TimeToX(_playbackRangeEnd);
+            if (endX < startX)
+                (startX, endX) = (endX, startX);
+
+            if (requireHitInsideRange && (local.x < startX || local.x > endX))
+                return false;
+
+            BeginPointerSession(new PointerSession
+            {
+                Mode = PointerSessionMode.PlaybackRangeMoveDrag,
+                PointerId = evt.pointerId,
+                PointerStartWorld = evt.position,
+                PointerStartLocal = local,
+                RangeStartAtPress = _playbackRangeStart,
+                RangeEndAtPress = _playbackRangeEnd,
+            });
+            BeginPlaybackRangeGhostSession();
+            return true;
+        }
+
+        private void BeginPlaybackRangeGhostSession()
+        {
+            _showPlaybackRangeGhost = true;
+            _playbackRangeGhostStart = _playbackRangeStart;
+            _playbackRangeGhostEnd = _playbackRangeEnd;
+            PositionPlaybackRangeVisuals();
+            PlaybackRangeGhostChanged?.Invoke(_playbackRangeGhostStart, _playbackRangeGhostEnd);
+        }
+
+        private void UpdatePlaybackRangeGhost(float start, float end, bool notify)
+        {
+            _showPlaybackRangeGhost = true;
+            _playbackRangeGhostStart = Mathf.Max(0f, start);
+            _playbackRangeGhostEnd = Mathf.Max(_playbackRangeGhostStart + MinPlaybackRangeDuration, end);
+            PositionPlaybackRangeVisuals();
+            if (notify)
+                PlaybackRangeGhostChanged?.Invoke(_playbackRangeGhostStart, _playbackRangeGhostEnd);
+        }
+
+        private void EndPlaybackRangeGhostSession(bool notifyEnded)
+        {
+            bool wasShowing = _showPlaybackRangeGhost;
+            _showPlaybackRangeGhost = false;
+            PositionPlaybackRangeVisuals();
+            if (wasShowing && notifyEnded)
+                PlaybackRangeGhostEnded?.Invoke();
+        }
+
+        private void DrawZeroDurationMarker(MeshGenerationContext ctx, SegmentSelectionModel model, VisualElement root)
         {
             var painter = ctx.painter2D;
             float w = root.resolvedStyle.width;
@@ -2055,10 +3206,10 @@ namespace TimboJimboEditor.Sequencer
             if (w <= 0f || h <= 0f)
                 return;
 
-            var colors = GetBlockColors(plan);
+            var editor = SegmentBlockEditorRegistry.GetEditor(model.Segment);
+            var colors = editor.GetBlockColors(model.Segment);
             float cx = w * 0.5f;
 
-            // Vertical line
             painter.strokeColor = colors.border;
             painter.lineWidth = 2f;
             painter.BeginPath();
@@ -2066,7 +3217,6 @@ namespace TimboJimboEditor.Sequencer
             painter.LineTo(new Vector2(cx, h));
             painter.Stroke();
 
-            // Top chevron — points DOWN (inward)
             float triW = 8f;
             float triH = 6f;
             painter.fillColor = colors.border;
@@ -2077,7 +3227,6 @@ namespace TimboJimboEditor.Sequencer
             painter.ClosePath();
             painter.Fill();
 
-            // Bottom chevron — points UP (inward)
             painter.BeginPath();
             painter.MoveTo(new Vector2(cx - triW * 0.5f, h));
             painter.LineTo(new Vector2(cx + triW * 0.5f, h));

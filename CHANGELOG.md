@@ -1,3 +1,7 @@
+## [0.7.0] - 06/07/2026
+
+- A big rewrite with a lot of new features and improvements. See readme for details. Package is starting to stabilize.
+
 ## [0.2.0] - 21/06/2026
 
 - Updated to use new Property Bindings API (`BulkWriteScope()`, `TryWrite()`, `TryRead()`)

@@ -1,5 +1,6 @@
 using System;
 using JetBrains.Annotations;
+using UnityEngine;
 
 
 namespace TimboJimbo.Sequencer.Segments
@@ -9,29 +10,50 @@ namespace TimboJimbo.Sequencer.Segments
     {
         public float StartTime;
         public SequenceProvider Provider;
+        public string SequenceName;
 
         public void SetStartTime(float startTime) => StartTime = startTime;
         public float GetStartTime() => StartTime;
 
+        private bool _isBuildingPlan = false;
+
         public override SegmentPlan GetPlan([CanBeNull] SegmentPlan parent)
         {
-            if(Provider != null)
+            if(_isBuildingPlan)
             {
-                var plan = Provider.GetPlan(parent);
-                
-                // we are effectively hijacking it!
-                plan.Segment = this;
-                plan.Timing.RelativeStartTime = StartTime;
-
-                return plan;
-            }
-            else
-            {
+                Debug.LogWarning("Detected recursive inclusion in InsertSequenceProvider. This is not supported and will likely lead to unexpected behaviour.");
                 return new SegmentPlan(this, parent)
                 {
                     Timing = { RelativeStartTime = StartTime, RelativeDuration = 0f }
                 };
             }
+
+            try
+            {
+                _isBuildingPlan = true;
+
+                if(Provider != null && Provider.TryGetPlan(SequenceName, out var plan, parent))
+                {
+                    // we are effectively hijacking it!
+                    plan.Segment = this;
+                    plan.Timing.RelativeStartTime = StartTime;
+
+                    return plan;
+                }
+                else
+                {
+                    return new SegmentPlan(this, parent)
+                    {
+                        Timing = { RelativeStartTime = StartTime, RelativeDuration = 0f }
+                    };
+                }
+
+            }
+            finally
+            {
+                _isBuildingPlan = false;
+            }
+
         }
     }
 }

@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using JetBrains.Annotations;
 using TimboJimbo.PropertyBindings;
-using UnityEngine;
-
 namespace TimboJimbo.Sequencer
 {
     public class SegmentPlan
@@ -34,15 +32,7 @@ namespace TimboJimbo.Sequencer
     public class SegmentBindingsPlan
     {
         public SegmentPlan Plan;
-        public GameObject BindingsRoot
-        {
-            get => _bindingRoot != null ? _bindingRoot : Plan.Parent?.Bindings.BindingsRoot;
-            set => _bindingRoot = value;
-        }
         public HashSet<BindableProperty> Properties;
-
-        private GameObject _bindingRoot;
-
         public SegmentBindingsPlan(SegmentPlan plan)
         {
             Plan = plan;

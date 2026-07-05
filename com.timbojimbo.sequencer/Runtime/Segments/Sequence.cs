@@ -9,8 +9,8 @@ namespace TimboJimbo.Sequencer.Segments
     [AddSegmentMenu("")]
     public class Sequence : Segment, IStartTimeConfigurable
     {
+        public string Name;
         public float StartTime;
-        public GameObject BindingRoot;
 
         [SerializeReference]
         public List<Segment> Segments = new List<Segment>();
@@ -22,7 +22,6 @@ namespace TimboJimbo.Sequencer.Segments
         {
             var plan = new SegmentPlan(this, parent)
             {
-                Bindings = { BindingsRoot = BindingRoot },
                 Timing = { RelativeStartTime = StartTime }
             };
 

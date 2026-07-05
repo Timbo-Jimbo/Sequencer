@@ -1,11 +1,11 @@
 
 namespace TimboJimbo.Sequencer.Builder
 {
-    public static class Seg
+    public static class Seq
     {
-        public static SegMake Make { get; } = new SegMake();
-        public static SegSchedule Schedule { get; } = new SegSchedule();
+        public static SeqMake Make { get; } = new SeqMake();
+        public static SeqSchedule Schedule { get; } = new SeqSchedule();
     }
-    public readonly struct SegMake { }
-    public readonly struct SegSchedule { }
+    public readonly struct SeqMake { }
+    public readonly struct SeqSchedule { }
 }

@@ -78,7 +78,7 @@ namespace TimboJimbo.Sequencer.Segments
                 _checker?.CleanUp();
             }
 
-            private async Awaitable WatchForResumeAsync(SequenceInstance sequence, CancellationToken ct)
+            private async Awaitable WatchForResumeAsync(SequencePlayer sequence, CancellationToken ct)
             {
                 while (!ct.IsCancellationRequested)
                 {
@@ -248,7 +248,7 @@ namespace TimboJimbo.Sequencer.Segments
     public static class PauseGateExtensions
     {
         public static Segment Pause(
-            this SegSchedule _, 
+            this SeqSchedule _, 
             float seconds
         )
         {
@@ -259,7 +259,7 @@ namespace TimboJimbo.Sequencer.Segments
         }
 
         public static Segment PauseUntil(
-            this SegSchedule _, 
+            this SeqSchedule _, 
             Func<bool> returnsTrue
         )
         {
@@ -270,7 +270,7 @@ namespace TimboJimbo.Sequencer.Segments
         }
 
         public static Segment PauseWhile(
-            this SegSchedule _, 
+            this SeqSchedule _, 
             Func<bool> returnsTrue
         )
         {
@@ -281,7 +281,7 @@ namespace TimboJimbo.Sequencer.Segments
         }
 
         public static Segment PauseUntilClick(
-            this SegSchedule _, 
+            this SeqSchedule _, 
             Button button
         )
         {

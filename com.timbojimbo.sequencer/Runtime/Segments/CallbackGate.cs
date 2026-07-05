@@ -56,21 +56,21 @@ namespace TimboJimbo.Sequencer.Segments
 
     public static class CallbackGateExtensions
     {
-        public static CallbackGate Callback(this SegMake _, UnityAction callback)
+        public static CallbackGate Callback(this SeqMake _, UnityAction callback)
         {
             var result = new CallbackGate();
             result.OnTriggered.AddListener(callback);
             return result;
         }
 
-        public static CallbackGate Callback(this SegMake _, UnityAction<PlaybackBoundaryContext> callback)
+        public static CallbackGate Callback(this SeqMake _, UnityAction<PlaybackBoundaryContext> callback)
         {
             var result = new CallbackGate();
             result.OnTriggeredWithContext.AddListener(callback);
             return result;
         }
 
-        public static CallbackGate Log(this SegMake _, string message)
+        public static CallbackGate Log(this SeqMake _, string message)
         {
             return _.Callback(() => Debug.Log(message));
         }

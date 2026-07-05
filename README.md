@@ -1,6 +1,10 @@
 # Timbo Jimbo - Sequencer
 
-A timeline-based animation sequencer for Unity.
+A timeline-based animation sequencer for Unity. 
+
+This package is heavily inspired by [Animation Sequencer](https://github.com/brunomikoski/Animation-Sequencer). You should check it out! 
+
+Animation Sequencer stepped up the game when it came to editor-authoring of sequence (Tweens, custom logic, etc). This package attempts to take it a step further by providing a visual timeline editor. Important to note that while conceptually similar, this package is *not* backed by an existing Tweening library like Animation Sequencer is.
 
 > [!WARNING]
 > This package is new - use at your own risk! :)

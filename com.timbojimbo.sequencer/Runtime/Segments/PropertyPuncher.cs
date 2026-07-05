@@ -57,10 +57,8 @@ namespace TimboJimbo.Sequencer.Segments
 			};
 		}
 
-		private sealed class Playback : SegmentPlayback
+		private sealed class Playback : PropertyPlayback
 		{
-			public PropertyBindingCollection BindingCollection;
-			public BindableProperty Property;
 			public ValueContainer Strength;
 			public int Vibrato;
 			public float Elasticity;
@@ -76,7 +74,7 @@ namespace TimboJimbo.Sequencer.Segments
 				ExecutionOrder = 100;
 			}
 
-			public override void Setup(in PlaybackSetupContext context)
+			protected override void OnSetup(in PlaybackSetupContext context)
 			{
 				_vibrato = Mathf.Max(1f, Vibrato);
 				_elasticity = Mathf.Clamp01(Elasticity);

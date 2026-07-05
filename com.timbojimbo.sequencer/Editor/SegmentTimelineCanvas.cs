@@ -41,6 +41,7 @@ namespace TimboJimboEditor.Sequencer
         public Action<IReadOnlyList<SegmentSelectionModel>> SelectionChanged;
         public Action<IReadOnlyList<(SegmentSelectionModel model, float start, float duration)>> TimeAdjustmentCommitted;
         public Action<IReadOnlyList<SegmentSelectionModel>> DeleteRequested;
+        public Action<IReadOnlyList<SegmentSelectionModel>, Converters.SegmentConverter> ConvertRequested;
         public Action<Type, float> AddRequested;
         public Action<Segment> DropSegmentRequested;
         public Action<float> SeekRequested;
@@ -2880,6 +2881,26 @@ namespace TimboJimboEditor.Sequencer
                         DeleteRequested?.Invoke(new[] { hitModel });
                 });
                 evt.menu.AppendSeparator();
+
+                var convertTargets = selectionCount > 0
+                    ? new List<SegmentSelectionModel>(_selection.EffectiveSelection)
+                    : new List<SegmentSelectionModel> { hitModel };
+
+                var convertSegments = convertTargets
+                    .Where(m => m != null && m.Segment != null)
+                    .Select(m => m.Segment)
+                    .ToList();
+
+                var converters = Converters.SegmentConverterRegistry.GetConvertersFor(convertSegments);
+                if (converters.Count > 0)
+                {
+                    for (int i = 0; i < converters.Count; i++)
+                    {
+                        var converter = converters[i];
+                        evt.menu.AppendAction($"Convert To/{converter.MenuName}", _ => ConvertRequested?.Invoke(convertTargets, converter));
+                    }
+                    evt.menu.AppendSeparator();
+                }
             }
 
             var addable = AddableSegmentTypeRegistry.AddableSegmentTypes;

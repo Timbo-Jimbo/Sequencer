@@ -48,15 +48,18 @@ namespace TimboJimbo.Sequencer.Segments
 			};
 		}
 
-		private sealed class Playback : SegmentPlayback
+		private sealed class Playback : PropertyPlayback
 		{
-			public PropertyBindingCollection BindingCollection;
-			public BindableProperty Property;
 			public ValueContainer Value;
 
 			public Playback(in PlaybackBuildContext context) : base(in context) { }
 
 			public override void OnEnter(in PlaybackBoundaryContext context)
+            {
+                BindingCollection.TryWrite(Property, Value);
+            }
+
+            protected override void InitializeProperty(in PlaybackSetupContext context)
             {
                 BindingCollection.TryWrite(Property, Value);
             }

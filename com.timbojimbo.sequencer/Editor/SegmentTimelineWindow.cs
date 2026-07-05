@@ -300,6 +300,7 @@ namespace TimboJimboEditor.Sequencer
             _canvas.SelectionChanged += OnCanvasSelectionChanged;
             _canvas.TimeAdjustmentCommitted += OnTimeAdjustmentCommitted;
             _canvas.DeleteRequested += OnDeleteRequested;
+            _canvas.ConvertRequested += OnConvertRequested;
             _canvas.AddRequested += OnAddRequested;
             _canvas.DropSegmentRequested += OnDropSegmentRequested;
             _canvas.SeekRequested += OnSeekRequested;
@@ -575,6 +576,23 @@ namespace TimboJimboEditor.Sequencer
         private void OnAddRequested(Type type, float time)
         {
             _sessionState.AddSegment(type, time);
+        }
+
+        private void OnConvertRequested(IReadOnlyList<SegmentSelectionModel> selectedModels, TimboJimboEditor.Sequencer.Converters.SegmentConverter converter)
+        {
+            var inserted = _sessionState.ConvertSegments(selectedModels, converter);
+            if (inserted == null || inserted.Count == 0)
+                return;
+
+            var insertedModels = _sessionState.Models
+                .Where(m => m != null && inserted.Contains(m.Segment))
+                .ToList();
+
+            if (insertedModels.Count > 0)
+            {
+                Selection.objects = insertedModels.Cast<UnityEngine.Object>().ToArray();
+                SyncCanvasSelection();
+            }
         }
 
         private void OnDropSegmentRequested(Segment segment)

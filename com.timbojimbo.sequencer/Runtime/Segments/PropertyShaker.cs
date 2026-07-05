@@ -70,10 +70,8 @@ namespace TimboJimbo.Sequencer.Segments
 			};
 		}
 
-		private sealed class Playback : SegmentPlayback
+		private sealed class Playback : PropertyPlayback
 		{
-			public PropertyBindingCollection BindingCollection;
-			public BindableProperty Property;
 			public ValueContainer Strength;
 			public int Vibrato;
 			public float Randomness;
@@ -96,7 +94,7 @@ namespace TimboJimbo.Sequencer.Segments
                 ExecutionOrder = 100;
             }
 
-			public override void Setup(in PlaybackSetupContext context)
+			protected override void OnSetup(in PlaybackSetupContext context)
 			{
 				_runtimeSeed = SeedMode == PropertyShakerSeedMode.Randomized
 					? Guid.NewGuid().GetHashCode()

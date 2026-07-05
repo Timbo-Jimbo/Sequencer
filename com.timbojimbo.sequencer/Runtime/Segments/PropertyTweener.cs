@@ -74,10 +74,8 @@ namespace TimboJimbo.Sequencer.Segments
             };
         }
 
-        public class Playback : SegmentPlayback
+        public class Playback : PropertyPlayback
         {
-            public PropertyBindingCollection BindingCollection;
-            public BindableProperty Property;
             public EaseType Ease;
             public TweenStart<ValueContainer> Start = TweenStart.Current<ValueContainer>();
             public TweenEnd<ValueContainer> End = TweenEnd.Initial<ValueContainer>();
@@ -93,7 +91,7 @@ namespace TimboJimbo.Sequencer.Segments
             {
             }
 
-            public override void Setup(in PlaybackSetupContext context)
+            protected override void OnSetup(in PlaybackSetupContext context)
             {
                 if (End.Mode == EasedEndMode.EndAtInitial)
                 {
@@ -101,30 +99,15 @@ namespace TimboJimbo.Sequencer.Segments
                     _endValue = readResult ? readValue : End.Value;
                     _endValueInitialized = true;
                 }
+            }
 
-                if(Start.Mode == EasedStartMode.StartFromAbsolute)
-                {
-                    //are we the first segment to write to this property?
-                    SegmentPlayback earliestPlayback = null;
-                    foreach (var playback in context.Playbacks)
-                    {
-                        if (
-                            playback is Playback p && 
-                            p.Property == Property && 
-                            (earliestPlayback == null || playback.AbsoluteStartTime < earliestPlayback.AbsoluteStartTime)
-                        )
-                        {
-                            earliestPlayback = playback;
-                        }
-                    }
-
-                    if (earliestPlayback == this)
-                    {
-                        // if so, we need to ensure the start value is correct from the outset
-                        //otherwise we will get a pop at the start of this segment.
-                        BindingCollection.TryWrite(Property, Start.Value);
-                    }
-                }
+            protected override void InitializeProperty(in PlaybackSetupContext context)
+            {
+                // We are the first playback to write to this property. If we start from
+                // an absolute value, establish it from the outset - otherwise we would
+                // get a pop at the start of this segment.
+                if (Start.Mode == EasedStartMode.StartFromAbsolute)
+                    BindingCollection.TryWrite(Property, Start.Value);
             }
 
             public override void OnEnter(in PlaybackBoundaryContext context)

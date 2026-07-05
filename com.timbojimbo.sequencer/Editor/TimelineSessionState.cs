@@ -379,6 +379,63 @@ namespace TimboJimboEditor.Sequencer
             Refresh();
         }
 
+        public List<Segment> ConvertSegments(IReadOnlyList<SegmentSelectionModel> segmentModels, Converters.SegmentConverter converter)
+        {
+            if (Provider == null || ActiveSequence == null || converter == null || segmentModels == null || segmentModels.Count == 0)
+                return null;
+
+            var validModels = segmentModels
+                .Where(m => m != null
+                            && ReferenceEquals(m.Handle.Provider, Provider)
+                            && string.Equals(m.Handle.SequenceName, SequenceName, StringComparison.Ordinal))
+                .GroupBy(m => m.Handle.Index)
+                .Select(g => g.First())
+                .OrderBy(m => m.Handle.Index)
+                .ToList();
+
+            if (validModels.Count == 0)
+                return null;
+
+            var inputSegments = validModels.Select(m => m.Segment).ToList();
+
+            List<Segment> outputSegments;
+            try
+            {
+                outputSegments = converter.Convert(inputSegments);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Segment conversion '{converter.MenuName}' failed: {e.Message}");
+                return null;
+            }
+
+            if (outputSegments == null || outputSegments.Count == 0)
+                return null;
+
+            Undo.IncrementCurrentGroup();
+            Undo.SetCurrentGroupName($"Convert Segments ({converter.MenuName})");
+            int undoGroup = Undo.GetCurrentGroup();
+
+            DeleteSegments(validModels);
+
+            var inserted = new List<Segment>();
+            foreach (var segment in outputSegments)
+            {
+                if (segment == null)
+                    continue;
+
+                AddSegment(segment);
+
+                var segments = ActiveSequence?.Segments;
+                if (segments != null && segments.Count > 0)
+                    inserted.Add(segments[segments.Count - 1]);
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+
+            return inserted;
+        }
+
         public void DeleteSegments(IReadOnlyList<SegmentSelectionModel> segmentModels)
         {
             if (Provider == null || ActiveSequence == null || segmentModels == null || segmentModels.Count == 0)

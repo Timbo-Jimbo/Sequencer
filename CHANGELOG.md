@@ -1,11 +1,6 @@
-## [0.3.0] - UNRELEASED
+## [0.7.0] - 06/07/2026
 
-- Added support for multi-selecting segments in the timeline (ctrl + click, shift + click, marquee select/deselect)
-- Improved snapping logic - now requires you to hold ctrl and can now snap to edges of segments in other lanes
-- Updated inspector to support multi-editing of segments
-- Improved lane packing stabilisation
-- Copy + Paste support
-- Updated `com.timbojimbo.propertybindings` dependency to `0.6.2`
+- A big rewrite with a lot of new features and improvements. See readme for details. Package is starting to stabilize.
 
 ## [0.2.0] - 21/06/2026
 

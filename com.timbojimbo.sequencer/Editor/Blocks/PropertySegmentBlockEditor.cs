@@ -6,12 +6,11 @@ using UnityEngine.UIElements;
 
 namespace TimboJimboEditor.Sequencer.Blocks
 {
-    [CustomSegmentBlockEditor(typeof(PropertyTweener))]
-    public sealed class PropertyTweenerBlockEditor : SegmentBlockEditor
+    public abstract class PropertySegmentBlockEditor : SegmentBlockEditor
     {
         public override void OnBlockGUI(Segment segment, VisualElement block)
         {
-            if (segment is not PropertyTweener tweener)
+            if (segment is not PropertySegment propertySegment)
                 return;
 
             var row = new VisualElement
@@ -30,11 +29,11 @@ namespace TimboJimboEditor.Sequencer.Blocks
             };
 
             var tweenerTargetGo = default(GameObject);
-            if (tweener.Property.Target is Component c)
+            if (propertySegment.Property.Target is Component c)
             {
                 tweenerTargetGo = c.gameObject;
             }
-            else if (tweener.Property.Target is GameObject go)
+            else if (propertySegment.Property.Target is GameObject go)
             {
                 tweenerTargetGo = go;
             }
@@ -78,7 +77,7 @@ namespace TimboJimboEditor.Sequencer.Blocks
                     pickingMode = PickingMode.Ignore,
                 };
 
-                var propName = NicifiedPropertyNameFromPath(tweener.Property.Path);
+                var propName = NicifiedPropertyNameFromPath(propertySegment.Property.Path);
                 string detailsText;
                 {
                     if(string.IsNullOrWhiteSpace(propName))
@@ -87,10 +86,10 @@ namespace TimboJimboEditor.Sequencer.Blocks
                     }
                     else
                     {
-                        var typeName = tweener.Property.Target.GetType().Name;
+                        var typeName = propertySegment.Property.Target.GetType().Name;
                         detailsText = $"{typeName} > {propName}";
 
-                        var iconContent = EditorGUIUtility.ObjectContent(tweener.Property.Target, tweener.Property.Target.GetType());
+                        var iconContent = EditorGUIUtility.ObjectContent(propertySegment.Property.Target, propertySegment.Property.Target.GetType());
                         if (iconContent.image != null)
                         {
                             detailRow.Add(new Image
@@ -126,7 +125,7 @@ namespace TimboJimboEditor.Sequencer.Blocks
             }
             else
             {
-                row.Add(new Label("Property Tweener")
+                row.Add(new Label(ObjectNames.NicifyVariableName(propertySegment.GetType().Name))
                 {
                     style =
                     {
@@ -154,10 +153,22 @@ namespace TimboJimboEditor.Sequencer.Blocks
 
         protected override int GetBlockColorSeed(Segment segment)
         {
-            if (segment is not PropertyTweener tweener || !tweener.Property.IsValid || tweener.Property.Target is not Object obj)
+            if (segment is not PropertySegment propertySegment || !propertySegment.Property.IsValid || propertySegment.Property.Target is not Object obj)
                 return base.GetBlockColorSeed(segment);
 
-            return DeterministicHash($"{obj.GetType().FullName} ({tweener.Property.Path})");
+            return DeterministicHash($"{obj.GetType().FullName} ({propertySegment.Property.Path})");
         }
     }
+
+    [CustomSegmentBlockEditor(typeof(PropertyTweener))]
+    public sealed class PropertyTweenerBlockEditor : PropertySegmentBlockEditor { }
+
+    [CustomSegmentBlockEditor(typeof(PropertyShaker))]
+    public sealed class PropertyShakerBlockEditor : PropertySegmentBlockEditor { }
+
+    [CustomSegmentBlockEditor(typeof(PropertyPuncher))]
+    public sealed class PropertyPuncherBlockEditor : PropertySegmentBlockEditor { }
+
+    [CustomSegmentBlockEditor(typeof(PropertySetter))]
+    public sealed class PropertySetterBlockEditor : PropertySegmentBlockEditor { }
 }

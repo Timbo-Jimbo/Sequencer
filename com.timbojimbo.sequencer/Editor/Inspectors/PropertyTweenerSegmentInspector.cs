@@ -26,6 +26,7 @@ namespace TimboJimboEditor.Sequencer.Segments
             var endValueProp = endProp.FindPropertyRelative("Value");
             var interpolationProp = property.FindPropertyRelative("Interpolation");
             var discreteValueSelectionProp = property.FindPropertyRelative("DiscreteValueSelection");
+            var preExtrapolationProp = property.FindPropertyRelative("PreExtrapolation");
             var propertyKindProp = bindablePropertyProp.FindPropertyRelative("_kind");
 
             DrawPropertyField(bindablePropertyProp, propertyKindProp, startValueProp, endValueProp);
@@ -49,6 +50,13 @@ namespace TimboJimboEditor.Sequencer.Segments
                         DrawMixedPropertiesLabel("Value");
                     else
                         DrawValueContainerField(startValueProp, bindablePropertyProp, "Value");
+
+                    // Pre-extrapolation only has a knowable value with an absolute start.
+                    EditorGUILayout.PropertyField(preExtrapolationProp, new GUIContent(
+                        "Pre-Extrapolation",
+                        "When this is the earliest segment targeting its property, 'Hold' writes the " +
+                        "start value up-front so the property holds it until this segment begins " +
+                        "(avoids a visible pop at the segment's start)."));
                 }
             }
 

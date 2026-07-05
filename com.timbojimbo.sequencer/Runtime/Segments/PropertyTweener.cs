@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using JetBrains.Annotations;
 using TimboJimbo.Core;
 using TimboJimbo.PropertyBindings;
 using TimboJimbo.Sequencer.Builder;
@@ -22,55 +20,32 @@ namespace TimboJimbo.Sequencer.Segments
     }
 
     [Serializable]
-    public class PropertyTweener : Segment, IStartTimeConfigurable, IDurationConfigurable, IPlaybackBuilder
+    public class PropertyTweener : PropertySegment, IDurationConfigurable
     {
-        public float StartTime;
         public float Duration;
-        public BindableProperty Property;
         public EaseType Ease = EaseType.Linear;
         public TweenStart<ValueContainer> Start = TweenStart.Current<ValueContainer>();
         public TweenEnd<ValueContainer> End = TweenEnd.Initial<ValueContainer>();
         public InterpolationConfig Interpolation;
         public DiscreteValueSelectionMode DiscreteValueSelection = DiscreteValueSelectionMode.Nearest;
 
+        /// Only meaningful when this is the earliest segment targeting its property and
+        /// Start.Mode is StartFromAbsolute (there is no knowable pre-roll value otherwise).
+        public PreExtrapolationMode PreExtrapolation = PreExtrapolationMode.Hold;
+
         public void SetDuration(float duration) => Duration = duration;
-        public float GetDuration() => Duration;
-        public void SetStartTime(float startTime) => StartTime = startTime;
-        public float GetStartTime() => StartTime;
+        public override float GetDuration() => Duration;
 
-        public override SegmentPlan GetPlan([CanBeNull] SegmentPlan parent)
+        protected override PropertyPlayback CreatePlayback(in PlaybackBuildContext context)
         {
-            if (!Property.IsValid)
-            {
-                return new SegmentPlan(this, parent)
-                {
-                    Timing = { RelativeStartTime = StartTime, RelativeDuration = Duration }
-                };
-            }
-
-            var plan = new SegmentPlan(this, parent)
-            {
-                Bindings = { Properties = new HashSet<BindableProperty> { Property } },
-                Timing = { RelativeStartTime = StartTime, RelativeDuration = Duration }
-            };
-
-            return plan;
-        }
-
-        public SegmentPlayback BuildPlayback(in PlaybackBuildContext context)
-        {
-            if (!Property.IsValid)
-                return new NoOpPlayback(context);
-
             return new Playback(context)
             {
-                BindingCollection = context.PropertyBindings,
-                Property = Property,
                 Ease = Ease,
                 Start = Start,
                 End = End,
                 Interpolation = Interpolation,
-                DiscreteValueSelection = DiscreteValueSelection
+                DiscreteValueSelection = DiscreteValueSelection,
+                PreExtrapolation = PreExtrapolation
             };
         }
 
@@ -81,6 +56,7 @@ namespace TimboJimbo.Sequencer.Segments
             public TweenEnd<ValueContainer> End = TweenEnd.Initial<ValueContainer>();
             public InterpolationConfig Interpolation;
             public DiscreteValueSelectionMode DiscreteValueSelection;
+            public PreExtrapolationMode PreExtrapolation;
 
             private bool _startValueInitialized;
             private bool _endValueInitialized;
@@ -91,7 +67,7 @@ namespace TimboJimbo.Sequencer.Segments
             {
             }
 
-            protected override void OnSetup(in PlaybackSetupContext context)
+            public override void Setup(in PlaybackSetupContext context)
             {
                 if (End.Mode == EasedEndMode.EndAtInitial)
                 {
@@ -101,13 +77,19 @@ namespace TimboJimbo.Sequencer.Segments
                 }
             }
 
-            protected override void InitializeProperty(in PlaybackSetupContext context)
+            public override bool TryGetPreExtrapolationValue(out ValueContainer value)
             {
-                // We are the first playback to write to this property. If we start from
-                // an absolute value, establish it from the outset - otherwise we would
-                // get a pop at the start of this segment.
-                if (Start.Mode == EasedStartMode.StartFromAbsolute)
-                    BindingCollection.TryWrite(Property, Start.Value);
+                // Hold the absolute start value until this segment begins - otherwise
+                // the property would sit at its scene value and pop when the tween starts.
+                // With StartFromCurrent there is no knowable pre-roll value.
+                if (PreExtrapolation == PreExtrapolationMode.Hold && Start.Mode == EasedStartMode.StartFromAbsolute)
+                {
+                    value = Start.Value;
+                    return true;
+                }
+
+                value = default;
+                return false;
             }
 
             public override void OnEnter(in PlaybackBoundaryContext context)

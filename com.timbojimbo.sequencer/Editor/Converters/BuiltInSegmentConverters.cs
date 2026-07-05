@@ -48,48 +48,28 @@ namespace TimboJimboEditor.Sequencer.Converters
 
         private static bool TryExtract(Segment segment, out CommonData data)
         {
-            switch (segment)
+            if (segment is not PropertySegment propertySegment)
             {
-                case PropertyTweener tweener:
-                    data = new CommonData
-                    {
-                        StartTime = tweener.StartTime,
-                        Duration = tweener.Duration,
-                        Property = tweener.Property,
-                        Value = tweener.End.Value,
-                    };
-                    return true;
-                case PropertyShaker shaker:
-                    data = new CommonData
-                    {
-                        StartTime = shaker.StartTime,
-                        Duration = shaker.Duration,
-                        Property = shaker.Property,
-                        Value = shaker.Strength,
-                    };
-                    return true;
-                case PropertyPuncher puncher:
-                    data = new CommonData
-                    {
-                        StartTime = puncher.StartTime,
-                        Duration = puncher.Duration,
-                        Property = puncher.Property,
-                        Value = puncher.Strength,
-                    };
-                    return true;
-                case PropertySetter setter:
-                    data = new CommonData
-                    {
-                        StartTime = setter.SetTime,
-                        Duration = 0f,
-                        Property = setter.Property,
-                        Value = setter.Value,
-                    };
-                    return true;
-                default:
-                    data = default;
-                    return false;
+                data = default;
+                return false;
             }
+
+            data = new CommonData
+            {
+                StartTime = propertySegment.StartTime,
+                Duration = propertySegment.GetDuration(),
+                Property = propertySegment.Property,
+                // Only the "defining" value differs per segment type.
+                Value = segment switch
+                {
+                    PropertyTweener tweener => tweener.End.Value,
+                    PropertyShaker shaker => shaker.Strength,
+                    PropertyPuncher puncher => puncher.Strength,
+                    PropertySetter setter => setter.Value,
+                    _ => default
+                }
+            };
+            return true;
         }
 
         protected static float EnsureDuration(float duration) => duration > 0f ? duration : DefaultDuration;
@@ -160,7 +140,7 @@ namespace TimboJimboEditor.Sequencer.Converters
         {
             return new PropertySetter
             {
-                SetTime = data.StartTime,
+                StartTime = data.StartTime,
                 Property = data.Property,
                 Value = data.Value,
             };
@@ -175,7 +155,7 @@ namespace TimboJimboEditor.Sequencer.Converters
 
         public override bool CanConvert(IReadOnlyList<Segment> segments)
         {
-            if (segments == null || segments.Count == 0)
+            if (segments == null || segments.Count <= 1)
                 return false;
 
             foreach (var segment in segments)

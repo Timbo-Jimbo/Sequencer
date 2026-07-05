@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using JetBrains.Annotations;
 using TimboJimbo.PropertyBindings;
 using TimboJimbo.Sequencer.Builder;
 using UnityEngine;
@@ -9,48 +7,26 @@ namespace TimboJimbo.Sequencer.Segments
 {
 	[Serializable]
 	[AddSegmentMenu("Property Setter")]
-	public class PropertySetter : Segment, IStartTimeConfigurable, IPlaybackBuilder
+	public class PropertySetter : PropertySegment
 	{
-		public float SetTime;
-		public BindableProperty Property;
 		public ValueContainer Value;
-        
-		public void SetStartTime(float startTime) => SetTime = startTime;
-		public float GetStartTime() => SetTime;
 
-		public override SegmentPlan GetPlan([CanBeNull] SegmentPlan parent)
+		/// Only meaningful when this is the earliest segment targeting its property.
+		public PreExtrapolationMode PreExtrapolation = PreExtrapolationMode.Hold;
+
+		protected override PropertyPlayback CreatePlayback(in PlaybackBuildContext context)
 		{
-			if (!Property.IsValid)
-			{
-				return new SegmentPlan(this, parent)
-				{
-					Timing = { RelativeStartTime = SetTime, RelativeDuration = 0 }
-				};
-			}
-
-			return new SegmentPlan(this, parent)
-			{
-				Bindings = { Properties = new HashSet<BindableProperty> { Property } },
-				Timing = { RelativeStartTime = SetTime, RelativeDuration = 0 }
-			};
-		}
-
-		public SegmentPlayback BuildPlayback(in PlaybackBuildContext context)
-		{
-			if (!Property.IsValid || context.PropertyBindings == null)
-				return new NoOpPlayback(context);
-
 			return new Playback(context)
 			{
-				BindingCollection = context.PropertyBindings,
-				Property = Property,
-                Value = Value
+                Value = Value,
+                PreExtrapolation = PreExtrapolation
 			};
 		}
 
 		private sealed class Playback : PropertyPlayback
 		{
 			public ValueContainer Value;
+			public PreExtrapolationMode PreExtrapolation;
 
 			public Playback(in PlaybackBuildContext context) : base(in context) { }
 
@@ -59,9 +35,16 @@ namespace TimboJimbo.Sequencer.Segments
                 BindingCollection.TryWrite(Property, Value);
             }
 
-            protected override void InitializeProperty(in PlaybackSetupContext context)
+            public override bool TryGetPreExtrapolationValue(out ValueContainer value)
             {
-                BindingCollection.TryWrite(Property, Value);
+                if (PreExtrapolation == PreExtrapolationMode.Hold)
+                {
+                    value = Value;
+                    return true;
+                }
+
+                value = default;
+                return false;
             }
 		}
 	}

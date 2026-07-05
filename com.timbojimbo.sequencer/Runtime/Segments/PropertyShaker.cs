@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using JetBrains.Annotations;
 using TimboJimbo.PropertyBindings;
 using UnityEngine;
 
@@ -14,11 +12,9 @@ namespace TimboJimbo.Sequencer.Segments
 
 	[Serializable]
 	[AddSegmentMenu("Property Shaker")]
-	public class PropertyShaker : Segment, IStartTimeConfigurable, IDurationConfigurable, IPlaybackBuilder
+	public class PropertyShaker : PropertySegment, IDurationConfigurable
 	{
-		public float StartTime;
 		public float Duration;
-		public BindableProperty Property;
 		public ValueContainer Strength;
 		[Min(1)] public int Vibrato = 10;
 		[Range(0f, 180f)] public float Randomness = 90f;
@@ -29,36 +25,12 @@ namespace TimboJimbo.Sequencer.Segments
 		public bool Additive = true;
 
 		public void SetDuration(float duration) => Duration = duration;
-		public float GetDuration() => Duration;
-		public void SetStartTime(float startTime) => StartTime = startTime;
-		public float GetStartTime() => StartTime;
+		public override float GetDuration() => Duration;
 
-		public override SegmentPlan GetPlan([CanBeNull] SegmentPlan parent)
+		protected override PropertyPlayback CreatePlayback(in PlaybackBuildContext context)
 		{
-			if (!Property.IsValid)
-			{
-				return new SegmentPlan(this, parent)
-				{
-					Timing = { RelativeStartTime = StartTime, RelativeDuration = Duration }
-				};
-			}
-
-			return new SegmentPlan(this, parent)
-			{
-				Bindings = { Properties = new HashSet<BindableProperty> { Property } },
-				Timing = { RelativeStartTime = StartTime, RelativeDuration = Duration }
-			};
-		}
-
-		public SegmentPlayback BuildPlayback(in PlaybackBuildContext context)
-		{
-			if (!Property.IsValid || context.PropertyBindings == null)
-				return new NoOpPlayback(context);
-
 			return new Playback(context)
 			{
-				BindingCollection = context.PropertyBindings,
-				Property = Property,
 				Strength = Strength,
 				Vibrato = Vibrato,
 				Randomness = Randomness,
@@ -70,19 +42,15 @@ namespace TimboJimbo.Sequencer.Segments
 			};
 		}
 
-		private sealed class Playback : PropertyPlayback
+		private sealed class Playback : OffsetPropertyPlayback
 		{
-			public ValueContainer Strength;
 			public int Vibrato;
 			public float Randomness;
 			public float FadeInFraction;
 			public float FadeOutFraction;
 			public PropertyShakerSeedMode SeedMode;
 			public int Seed;
-			public bool Additive;
 
-			private ValueContainer _baseValue;
-			private bool _baseValueInitialized;
 			private int _runtimeSeed;
 			private float _noiseFrequency;
 			private float _randomnessFactor;
@@ -91,11 +59,12 @@ namespace TimboJimbo.Sequencer.Segments
 
 			public Playback(in PlaybackBuildContext context) : base(in context)
             {
-                ExecutionOrder = 100;
             }
 
-			protected override void OnSetup(in PlaybackSetupContext context)
+			public override void Setup(in PlaybackSetupContext context)
 			{
+				base.Setup(context);
+
 				_runtimeSeed = SeedMode == PropertyShakerSeedMode.Randomized
 					? Guid.NewGuid().GetHashCode()
 					: Seed;
@@ -109,50 +78,9 @@ namespace TimboJimbo.Sequencer.Segments
 				_fadeOutFraction = Mathf.Clamp01(FadeOutFraction);
 			}
 
-			public override void OnEnter(in PlaybackBoundaryContext context)
-			{
-				EnsureBaseValue();
-
-				if (!Additive)
-					BindingCollection.TryWrite(Property, _baseValue);
-			}
-
-			public override void OnSample(in PlaybackSampleContext context)
-			{
-				EnsureBaseValue();
-
-				var offsetValue = SampleOffsetValue(context.NormalizedTime);
-				
-                ValueContainer outputValue;
-                if(Additive && BindingCollection.TryRead(Property, out var currentValue))
-                    outputValue = ValueContainer.Add(currentValue, offsetValue);
-                else
-                    outputValue = ValueContainer.Add(_baseValue, offsetValue);
-
-				BindingCollection.TryWrite(Property, outputValue);
-			}
-
-			public override void OnExit(in PlaybackBoundaryContext context)
-			{
-				EnsureBaseValue();
-				BindingCollection.TryWrite(Property, _baseValue);
-			}
-
-			private void EnsureBaseValue()
-			{
-				if (_baseValueInitialized)
-					return;
-
-				if (!BindingCollection.TryRead(Property, out _baseValue))
-					_baseValue = ValueContainer.FromDefault(Property.Kind);
-
-				_baseValueInitialized = true;
-			}
-
-			private ValueContainer SampleOffsetValue(float normalizedTime)
+			protected override ValueContainer SampleOffset(float normalizedTime, in ValueContainer strength)
 			{
 				var amplitude = ComputeAmplitude(normalizedTime);
-				var strength = ResolveStrengthForProperty();
 
 				return Property.Kind switch
 				{
@@ -181,14 +109,6 @@ namespace TimboJimbo.Sequencer.Segments
 						strength.QuaternionValue.eulerAngles.z * SampleSignedNoise(2, normalizedTime)) * amplitude)),
 					_ => ValueContainer.FromDefault(Property.Kind)
 				};
-			}
-
-			private ValueContainer ResolveStrengthForProperty()
-			{
-				if (Strength.Kind == Property.Kind)
-					return Strength;
-
-				return ValueContainer.FromDefault(Property.Kind);
 			}
 
 			private float SampleSignedNoise(int channel, float normalizedTime)

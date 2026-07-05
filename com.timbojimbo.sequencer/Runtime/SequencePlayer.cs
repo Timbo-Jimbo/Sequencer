@@ -482,6 +482,10 @@ namespace TimboJimbo.Sequencer
                 var context = new PlaybackSetupContext(_instance, _compiled.Playbacks, _instance.IsPreview);
                 foreach (var playback in _compiled.Playbacks)
                     playback.Setup(in context);
+
+                // Cross-playback, per-property coordination runs after every playback
+                // has completed its own setup (two-phase: setup, then coordinate).
+                _compiled.ApplyPreExtrapolation();
             }
 
             private void ProcessKeyframesAtCurrentPlayhead(SegmentEvaluationMode evaluationMode, bool honorInterruptions)
@@ -564,12 +568,50 @@ namespace TimboJimbo.Sequencer
         public KeyframeTimeline Timeline { get; }
         public BindingSet Bindings { get; }
 
-        private CompiledSequence(float duration, IReadOnlyList<SegmentPlayback> playbacks, KeyframeTimeline timeline, BindingSet bindings)
+        /// <summary>
+        /// The earliest playback per unique driven property (derived from the plan's
+        /// declared bindings), for playbacks that opted into pre-extrapolation.
+        /// Computed once at compile time and re-applied on every setup pass.
+        /// </summary>
+        private readonly IReadOnlyList<PreExtrapolationTarget> _preExtrapolationTargets;
+
+        internal readonly struct PreExtrapolationTarget
+        {
+            public readonly IPreExtrapolationSource Source;
+            public readonly BindableProperty Property;
+            public readonly PropertyBindingCollection Bindings;
+
+            public PreExtrapolationTarget(IPreExtrapolationSource source, BindableProperty property, PropertyBindingCollection bindings)
+            {
+                Source = source;
+                Property = property;
+                Bindings = bindings;
+            }
+        }
+
+        private CompiledSequence(
+            float duration,
+            IReadOnlyList<SegmentPlayback> playbacks,
+            KeyframeTimeline timeline,
+            BindingSet bindings,
+            IReadOnlyList<PreExtrapolationTarget> preExtrapolationTargets)
         {
             Duration = duration;
             Playbacks = playbacks;
             Timeline = timeline;
             Bindings = bindings;
+            _preExtrapolationTargets = preExtrapolationTargets;
+        }
+
+        /// <summary>Writes each pre-extrapolated property's pre-roll value. Called after every setup pass.</summary>
+        public void ApplyPreExtrapolation()
+        {
+            for (int i = 0; i < _preExtrapolationTargets.Count; i++)
+            {
+                var target = _preExtrapolationTargets[i];
+                if (target.Source.TryGetPreExtrapolationValue(target.Property, out var value))
+                    target.Bindings.TryWrite(target.Property, value);
+            }
         }
 
         public static CompiledSequence Compile(Sequence root)
@@ -581,10 +623,11 @@ namespace TimboJimbo.Sequencer
             var duration = Mathf.Max(0f, rootPlan.Timing.AbsoluteDuration);
 
             var bindings = SequenceCompiler.ResolveBindings(rootPlan, out var planToBindingRoot);
-            var playbacks = SequenceCompiler.BuildPlaybacks(rootPlan, bindings, planToBindingRoot);
+            var playbacks = SequenceCompiler.BuildPlaybacks(rootPlan, bindings, planToBindingRoot, out var propertyDrivers);
             var timeline = KeyframeTimeline.Build(playbacks);
+            var preExtrapolationTargets = SequenceCompiler.ResolvePreExtrapolationTargets(propertyDrivers);
 
-            return new CompiledSequence(duration, playbacks, timeline, bindings);
+            return new CompiledSequence(duration, playbacks, timeline, bindings, preExtrapolationTargets);
         }
     }
 
@@ -733,9 +776,14 @@ namespace TimboJimbo.Sequencer
             return new BindingSet(collections, restoreValues);
         }
 
-        public static List<SegmentPlayback> BuildPlaybacks(SegmentPlan rootPlan, BindingSet bindings, Dictionary<SegmentPlan, GameObject> planToBindingRoot)
+        public static List<SegmentPlayback> BuildPlaybacks(
+            SegmentPlan rootPlan,
+            BindingSet bindings,
+            Dictionary<SegmentPlan, GameObject> planToBindingRoot,
+            out List<(SegmentPlayback playback, BindableProperty property, PropertyBindingCollection collection)> propertyDrivers)
         {
             var playbacks = new List<SegmentPlayback>();
+            propertyDrivers = new List<(SegmentPlayback, BindableProperty, PropertyBindingCollection)>();
 
             // Depth-first traversal.
             var openList = new Stack<SegmentPlan>();
@@ -748,12 +796,23 @@ namespace TimboJimbo.Sequencer
                 if (current.Segment is IPlaybackBuilder playbackBuilder)
                 {
                     var bindingRoot = planToBindingRoot.TryGetValue(current, out var root) ? root : null;
+                    var collection = bindings.GetCollection(bindingRoot);
                     var buildContext = new PlaybackBuildContext(
-                        propertyBindings: bindings.GetCollection(bindingRoot),
+                        propertyBindings: collection,
                         absoluteStartTime: current.Timing.AbsoluteStartTime,
                         absoluteDuration: current.Timing.AbsoluteDuration);
 
-                    playbacks.Add(playbackBuilder.BuildPlayback(in buildContext));
+                    var playback = playbackBuilder.BuildPlayback(in buildContext);
+                    playbacks.Add(playback);
+
+                    // The plan is the type-agnostic declaration of which properties a
+                    // segment drives - record them so cross-playback, per-property
+                    // behaviour (e.g. pre-extrapolation) can be resolved at compile time.
+                    if (collection != null)
+                    {
+                        foreach (var property in current.Bindings.Properties)
+                            propertyDrivers.Add((playback, property, collection));
+                    }
                 }
 
                 for (int i = current.Children.Count - 1; i >= 0; i--)
@@ -761,6 +820,39 @@ namespace TimboJimbo.Sequencer
             }
 
             return playbacks;
+        }
+
+        /// <summary>
+        /// Determines, per unique driven property, the earliest playback (ties broken by
+        /// ExecutionOrder, then discovery order). If that playback opted into pre-extrapolation
+        /// via <see cref="IPreExtrapolationSource"/>, it becomes the property's pre-roll source.
+        /// The earliest playback "owns" the pre-roll even when it does not implement the
+        /// interface - in that case the property simply has no pre-extrapolation.
+        /// </summary>
+        public static IReadOnlyList<CompiledSequence.PreExtrapolationTarget> ResolvePreExtrapolationTargets(
+            List<(SegmentPlayback playback, BindableProperty property, PropertyBindingCollection collection)> propertyDrivers)
+        {
+            var earliestPerProperty = new Dictionary<BindableProperty, (SegmentPlayback playback, PropertyBindingCollection collection)>();
+
+            foreach (var (playback, property, collection) in propertyDrivers)
+            {
+                if (!earliestPerProperty.TryGetValue(property, out var current)
+                    || playback.AbsoluteStartTime < current.playback.AbsoluteStartTime
+                    || (playback.AbsoluteStartTime == current.playback.AbsoluteStartTime
+                        && playback.ExecutionOrder < current.playback.ExecutionOrder))
+                {
+                    earliestPerProperty[property] = (playback, collection);
+                }
+            }
+
+            var targets = new List<CompiledSequence.PreExtrapolationTarget>();
+            foreach (var (property, entry) in earliestPerProperty)
+            {
+                if (entry.playback is IPreExtrapolationSource source)
+                    targets.Add(new CompiledSequence.PreExtrapolationTarget(source, property, entry.collection));
+            }
+
+            return targets;
         }
     }
 

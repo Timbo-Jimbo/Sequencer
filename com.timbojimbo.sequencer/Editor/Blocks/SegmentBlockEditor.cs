@@ -9,7 +9,7 @@ using UnityEngine.UIElements;
 
 namespace TimboJimboEditor.Sequencer.Blocks
 {
-    [AttributeUsage(AttributeTargets.Class, Inherited = false)]
+    [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = true)]
     public sealed class CustomSegmentBlockEditorAttribute : EditorExtensionAttribute
     {
 

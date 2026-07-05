@@ -12,9 +12,10 @@ namespace TimboJimboEditor.Sequencer.Segments
     {
         public override void OnInspectorGUI(SerializedProperty property)
         {
-            var setTimeProp = property.FindPropertyRelative("SetTime");
+            var setTimeProp = property.FindPropertyRelative("StartTime");
             var bindablePropertyProp = property.FindPropertyRelative("Property");
             var valueProp = property.FindPropertyRelative("Value");
+            var preExtrapolationProp = property.FindPropertyRelative("PreExtrapolation");
             var kindProp = bindablePropertyProp.FindPropertyRelative("_kind");
 
             DrawPropertyField(bindablePropertyProp, kindProp, valueProp);
@@ -25,6 +26,10 @@ namespace TimboJimboEditor.Sequencer.Segments
             GUILayout.Space(8);
 
             DrawValueField(valueProp, bindablePropertyProp);
+            EditorGUILayout.PropertyField(preExtrapolationProp, new GUIContent(
+                "Pre-Extrapolation",
+                "When this is the earliest segment targeting its property, 'Hold' writes the " +
+                "value up-front so the property holds it until the set time is reached."));
         }
 
         private static void DrawPropertyField(

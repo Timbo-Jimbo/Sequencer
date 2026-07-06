@@ -2,6 +2,8 @@
 
 A timeline-based animation sequencer for Unity. 
 
+https://github.com/user-attachments/assets/9afb1039-1d5b-4b89-9c2c-cabced7b008b
+
 This package is heavily inspired by [Animation Sequencer](https://github.com/brunomikoski/Animation-Sequencer). You should check it out! 
 
 Animation Sequencer stepped up the game when it came to editor-authoring of sequence (Tweens, custom logic, etc). This package attempts to take it a step further by providing a visual timeline editor. Important to note that while conceptually similar, this package is *not* backed by an existing Tweening library like Animation Sequencer is.

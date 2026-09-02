@@ -1,3 +1,10 @@
+## [Unreleased]
+
+- Added structured provider and sequence validation for names, segment structure, timing, includes, and property bindings
+- Added idempotent named-sequence create/upsert/remove APIs
+- Added programmatic segment add/remove/replace/clear operations on `Sequence`
+- Validation reuses Property Bindings resolution diagnostics and reports recursive includes before playback
+
 ## [0.7.0] - 06/07/2026
 
 - A big rewrite with a lot of new features and improvements. See readme for details. Package is starting to stabilize.

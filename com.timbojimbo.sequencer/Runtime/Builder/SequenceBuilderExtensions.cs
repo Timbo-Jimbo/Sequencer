@@ -346,22 +346,6 @@ public static class SequenceBuilderExtensions
         }
     }
 
-    private class OffsetSegment : Segment
-    {
-        public float Offset;
-        public Segment InnerSegment;
-
-        public override SegmentPlan GetPlan(SegmentPlan parent)
-        {
-            var blueprint = new SegmentPlan(this, parent);
-
-            var innerPlan = InnerSegment.GetPlan(blueprint);
-            innerPlan.Timing.RelativeStartTime += Offset;
-
-            return blueprint;
-        }
-    }
-
     private class ConditionalSegment : Segment
     {
         public Func<bool> Condition;

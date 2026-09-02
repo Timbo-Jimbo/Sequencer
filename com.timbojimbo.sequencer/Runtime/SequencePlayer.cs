@@ -654,6 +654,7 @@ namespace TimboJimbo.Sequencer
                 {
                     var resolvedBindingRoot = default(Transform);
                     using (ListPool<Transform>.Get(out var potentialBindingRoots))
+                    using (ListPool<BindableProperty>.Get(out var resolvableProperties))
                     {
                         foreach (var property in current.Bindings.Properties)
                         {
@@ -671,6 +672,7 @@ namespace TimboJimbo.Sequencer
 
                             var potentialBindingRoot = propertyTransform.parent != null ? propertyTransform.parent : propertyTransform;
                             potentialBindingRoots.Add(potentialBindingRoot);
+                            resolvableProperties.Add(property);
                         }
 
                         // nearest ancestor to all
@@ -697,54 +699,64 @@ namespace TimboJimbo.Sequencer
 
                         resolvedBindingRoot = commonAncestor;
 
-                        foreach (var (root, _) in bindingRootToProperties)
-                        {
-                            if (commonAncestor.IsChildOf(root))
-                            {
-                                resolvedBindingRoot = root;
-                                break;
-                            }
-                        }
-                    }
-
-                    // New/unique binding root, so we create a new entry for it.
-                    if (!bindingRootToProperties.TryGetValue(resolvedBindingRoot, out var existingEntry))
-                    {
-                        bindingRootToProperties[resolvedBindingRoot] = current.Bindings.Properties.ToHashSet();
-
-                        // Absorb any existing binding roots that are descendants of this new one.
-                        using (ListPool<Transform>.Get(out var rootsToAbsorb))
+                        if (resolvedBindingRoot != null)
                         {
                             foreach (var (root, _) in bindingRootToProperties)
                             {
-                                if (root == resolvedBindingRoot)
-                                    continue;
-
-                                if (root.transform.IsChildOf(resolvedBindingRoot))
-                                    rootsToAbsorb.Add(root);
-                            }
-
-                            foreach (var root in rootsToAbsorb)
-                            {
-                                var propertiesToAbsorb = bindingRootToProperties[root];
-                                bindingRootToProperties.Remove(root);
-                                bindingRootToProperties[resolvedBindingRoot].UnionWith(propertiesToAbsorb);
-                            }
-
-                            // Redirect any already-mapped plans from the absorbed roots to the new root.
-                            foreach (var plan in planToBindingRoot.Keys.ToList())
-                            {
-                                if (planToBindingRoot[plan] != null && rootsToAbsorb.Contains(planToBindingRoot[plan].transform))
-                                    planToBindingRoot[plan] = resolvedBindingRoot.gameObject;
+                                if (commonAncestor.IsChildOf(root))
+                                {
+                                    resolvedBindingRoot = root;
+                                    break;
+                                }
                             }
                         }
-                    }
-                    else
-                    {
-                        existingEntry.UnionWith(current.Bindings.Properties);
-                    }
 
-                    planToBindingRoot[current] = resolvedBindingRoot.gameObject;
+                        if (resolvedBindingRoot == null)
+                        {
+                            planToBindingRoot[current] = null;
+                        }
+                        else
+                        {
+                            // New/unique binding root, so we create a new entry for it.
+                            if (!bindingRootToProperties.TryGetValue(resolvedBindingRoot, out var existingEntry))
+                            {
+                                bindingRootToProperties[resolvedBindingRoot] = resolvableProperties.ToHashSet();
+
+                                // Absorb any existing binding roots that are descendants of this new one.
+                                using (ListPool<Transform>.Get(out var rootsToAbsorb))
+                                {
+                                    foreach (var (root, _) in bindingRootToProperties)
+                                    {
+                                        if (root == resolvedBindingRoot)
+                                            continue;
+
+                                        if (root.IsChildOf(resolvedBindingRoot))
+                                            rootsToAbsorb.Add(root);
+                                    }
+
+                                    foreach (var root in rootsToAbsorb)
+                                    {
+                                        var propertiesToAbsorb = bindingRootToProperties[root];
+                                        bindingRootToProperties.Remove(root);
+                                        bindingRootToProperties[resolvedBindingRoot].UnionWith(propertiesToAbsorb);
+                                    }
+
+                                    // Redirect any already-mapped plans from the absorbed roots to the new root.
+                                    foreach (var plan in planToBindingRoot.Keys.ToList())
+                                    {
+                                        if (planToBindingRoot[plan] != null && rootsToAbsorb.Contains(planToBindingRoot[plan].transform))
+                                            planToBindingRoot[plan] = resolvedBindingRoot.gameObject;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                existingEntry.UnionWith(resolvableProperties);
+                            }
+
+                            planToBindingRoot[current] = resolvedBindingRoot.gameObject;
+                        }
+                    }
                 }
                 else
                 {

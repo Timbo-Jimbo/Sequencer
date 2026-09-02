@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [0.8.1] - 02/09/2026
+
+### Added
+
+- Added the package-native `TimboJimboTests.Sequencer` Edit Mode test assembly covering player lifecycle, seeking, property playback, compilation, and validation
+- Added the `TimboJimboTests.Sequencer.PlayMode` test assembly covering self-driven playback, completion, and disposal through the player loop
+
+### Changed
+
+- Property compilation now safely ignores targets outside a `GameObject` hierarchy while continuing to compile valid sibling playbacks
+- Removed the unused internal `OffsetSegment` implementation
+- Updated `com.timbojimbo.propertybindings` dependency to `0.8.1` so malformed value kinds fail safely at the binding boundary
+- Added the `com.unity.test-framework` `1.6.0` development dependency
+
 ## [0.8.0] - 02/09/2026
 
 ### Added

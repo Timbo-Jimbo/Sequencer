@@ -1,13 +1,14 @@
 {
 	"name": "com.timbojimbo.sequencer",
 	"displayName": "Sequencer",
-	"version": "0.8.0",
+	"version": "0.8.1",
 	"unity": "6000.0",
 	"unityRelease": "0f1",
 	"description": "An extensible timeline-based sequencing tool for Unity.",
 	"dependencies": {
 		"com.timbojimbo.core": "0.5.1",
-		"com.timbojimbo.propertybindings": "0.8.0"
+		"com.unity.test-framework": "1.6.0",
+		"com.timbojimbo.propertybindings": "0.8.1"
 	},
 	"author": {
 		"name": "Timbo Jimbo",

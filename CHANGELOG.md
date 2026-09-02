@@ -1,9 +1,18 @@
 ## [Unreleased]
 
+## [0.8.0] - 02/09/2026
+
+### Added
+
 - Added structured provider and sequence validation for names, segment structure, timing, includes, and property bindings
 - Added idempotent named-sequence create/upsert/remove APIs
 - Added programmatic segment add/remove/replace/clear operations on `Sequence`
+
+### Changed
+
 - Validation reuses Property Bindings resolution diagnostics and reports recursive includes before playback
+- Transform convenience builders now create canonical descriptor-backed properties and typed values
+- Updated `com.timbojimbo.propertybindings` dependency to `0.8.0`
 
 ## [0.7.0] - 06/07/2026
 

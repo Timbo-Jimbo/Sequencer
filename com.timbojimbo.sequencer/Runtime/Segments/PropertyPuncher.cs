@@ -75,8 +75,8 @@ namespace TimboJimbo.Sequencer.Segments
 		{
 			return new PropertyPuncher
 			{
-				Property = BindableProperty.CreateThreeComponent(target, "m_LocalPosition", ValueKind.Vector3, "x", "y", "z"),
-				Strength = ValueContainer.FromVector3(strength),
+				Property = BindableProperty.Create(target, TransformProperties.LocalPosition),
+				Strength = ValueContainer.From(strength),
 				Duration = duration,
 				Vibrato = vibrato,
 				Elasticity = elasticity,
@@ -95,8 +95,8 @@ namespace TimboJimbo.Sequencer.Segments
 		{
 			return new PropertyPuncher
 			{
-				Property = BindableProperty.CreateThreeComponent(target, "m_LocalScale", ValueKind.Vector3, "x", "y", "z"),
-				Strength = ValueContainer.FromVector3(strength),
+				Property = BindableProperty.Create(target, TransformProperties.LocalScale),
+				Strength = ValueContainer.From(strength),
 				Duration = duration,
 				Vibrato = vibrato,
 				Elasticity = elasticity,
@@ -115,8 +115,8 @@ namespace TimboJimbo.Sequencer.Segments
 		{
 			return new PropertyPuncher
 			{
-				Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
-				Strength = ValueContainer.FromQuaternion(Quaternion.Euler(strength)),
+				Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
+				Strength = ValueContainer.From(Quaternion.Euler(strength)),
 				Duration = duration,
 				Vibrato = vibrato,
 				Elasticity = elasticity,

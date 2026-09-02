@@ -60,8 +60,8 @@ namespace TimboJimbo.Sequencer.Segments
         {
             return new PropertySetter
             {
-                Property = BindableProperty.CreateThreeComponent(target, "m_LocalPosition", ValueKind.Vector3, "x", "y", "z"),
-                Value = ValueContainer.FromVector3(position)
+                Property = BindableProperty.Create(target, TransformProperties.LocalPosition),
+                Value = ValueContainer.From(position)
             };
         }
 
@@ -73,8 +73,8 @@ namespace TimboJimbo.Sequencer.Segments
         {
             return new PropertySetter
             {
-                Property = BindableProperty.CreateThreeComponent(target, "m_LocalScale", ValueKind.Vector3, "x", "y", "z"),
-                Value = ValueContainer.FromVector3(scale)
+                Property = BindableProperty.Create(target, TransformProperties.LocalScale),
+                Value = ValueContainer.From(scale)
             };
         }
 
@@ -86,8 +86,8 @@ namespace TimboJimbo.Sequencer.Segments
         {
             return new PropertySetter
             {
-                Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
-                Value = ValueContainer.FromQuaternion(rotation)
+                Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
+                Value = ValueContainer.From(rotation)
             };
         }
 
@@ -99,8 +99,8 @@ namespace TimboJimbo.Sequencer.Segments
         {
             return new PropertySetter
             {
-                Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
-                Value = ValueContainer.FromQuaternion(Quaternion.Euler(eulerAngles))
+                Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
+                Value = ValueContainer.From(Quaternion.Euler(eulerAngles))
             };
         }
     }

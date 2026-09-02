@@ -196,9 +196,9 @@ namespace TimboJimbo.Sequencer.Segments
         {
             return new PropertyTweener
             {
-                Property = BindableProperty.CreateThreeComponent(target, "m_LocalPosition", ValueKind.Vector3, "x", "y", "z"),
-                Start = new TweenStart<ValueContainer> { Value = ValueContainer.FromVector3(start.Value), Mode = start.Mode },
-                End = new TweenEnd<ValueContainer> { Value = ValueContainer.FromVector3(end.Value), Mode = end.Mode },
+                Property = BindableProperty.Create(target, TransformProperties.LocalPosition),
+                Start = new TweenStart<ValueContainer> { Value = ValueContainer.From(start.Value), Mode = start.Mode },
+                End = new TweenEnd<ValueContainer> { Value = ValueContainer.From(end.Value), Mode = end.Mode },
                 Duration = duration,
                 Ease = ease,
                 Interpolation = new InterpolationConfig { Vector3 = interpolationMode }
@@ -217,9 +217,9 @@ namespace TimboJimbo.Sequencer.Segments
         {
             return new PropertyTweener
             {
-                Property = BindableProperty.CreateThreeComponent(target, "m_LocalScale", ValueKind.Vector3, "x", "y", "z"),
-                Start = new TweenStart<ValueContainer> { Value = ValueContainer.FromVector3(start.Value), Mode = start.Mode },
-                End = new TweenEnd<ValueContainer> { Value = ValueContainer.FromVector3(end.Value), Mode = end.Mode },
+                Property = BindableProperty.Create(target, TransformProperties.LocalScale),
+                Start = new TweenStart<ValueContainer> { Value = ValueContainer.From(start.Value), Mode = start.Mode },
+                End = new TweenEnd<ValueContainer> { Value = ValueContainer.From(end.Value), Mode = end.Mode },
                 Duration = duration,
                 Ease = ease,
                 Interpolation = new InterpolationConfig { Vector3 = interpolationMode }
@@ -238,9 +238,9 @@ namespace TimboJimbo.Sequencer.Segments
         {
             return new PropertyTweener
             {
-                Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
-                Start = new TweenStart<ValueContainer> { Value = ValueContainer.FromQuaternion(start.Value), Mode = start.Mode },
-                End = new TweenEnd<ValueContainer> { Value = ValueContainer.FromQuaternion(end.Value), Mode = end.Mode },
+                Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
+                Start = new TweenStart<ValueContainer> { Value = ValueContainer.From(start.Value), Mode = start.Mode },
+                End = new TweenEnd<ValueContainer> { Value = ValueContainer.From(end.Value), Mode = end.Mode },
                 Duration = duration,
                 Ease = ease,
                 Interpolation = new InterpolationConfig { Rotation = interpolationMode }
@@ -259,9 +259,9 @@ namespace TimboJimbo.Sequencer.Segments
         {
             return new PropertyTweener
             {
-                Property = BindableProperty.CreateFourComponent(target, "m_LocalRotation", ValueKind.Quaternion, "x", "y", "z", "w"),
-                Start = new TweenStart<ValueContainer> { Value = ValueContainer.FromQuaternion(Quaternion.Euler(start.Value)), Mode = start.Mode },
-                End = new TweenEnd<ValueContainer> { Value = ValueContainer.FromQuaternion(Quaternion.Euler(end.Value)), Mode = end.Mode },
+                Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
+                Start = new TweenStart<ValueContainer> { Value = ValueContainer.From(Quaternion.Euler(start.Value)), Mode = start.Mode },
+                End = new TweenEnd<ValueContainer> { Value = ValueContainer.From(Quaternion.Euler(end.Value)), Mode = end.Mode },
                 Duration = duration,
                 Ease = ease,
                 Interpolation = new InterpolationConfig { Rotation = interpolationMode }

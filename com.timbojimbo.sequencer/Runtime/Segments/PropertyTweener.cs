@@ -9,7 +9,9 @@ namespace TimboJimbo.Sequencer.Segments
     public enum EasedStartMode
     {
         StartFromAbsolute,
-        StartFromCurrent
+        StartFromCurrent,
+        /// <summary>Start at the property's value on entry plus <c>Start.Value</c>. Pairs with <see cref="EasedEndMode.EndAtInitial"/> for slide/scale-in.</summary>
+        StartFromRelative
     }
 
     public enum EasedEndMode
@@ -62,6 +64,8 @@ namespace TimboJimbo.Sequencer.Segments
             private bool _endValueInitialized;
             private ValueContainer _startValue;
             private ValueContainer _endValue;
+            private ValueContainer _initialValue;
+            private bool _hasInitialValue;
 
             public Playback(in PlaybackBuildContext context) : base(in context)
             {
@@ -69,23 +73,33 @@ namespace TimboJimbo.Sequencer.Segments
 
             public override void Setup(in PlaybackSetupContext context)
             {
+                _startValueInitialized = false;
+                _endValueInitialized = false;
+                _hasInitialValue = BindingCollection.TryRead(Property, out _initialValue);
+
                 if (End.Mode == EasedEndMode.EndAtInitial)
                 {
-                    var readResult = BindingCollection.TryRead(Property, out var readValue);
-                    _endValue = readResult ? readValue : End.Value;
+                    _endValue = _hasInitialValue ? _initialValue : End.Value;
                     _endValueInitialized = true;
                 }
             }
 
             public override bool TryGetPreExtrapolationValue(out ValueContainer value)
             {
-                // Hold the absolute start value until this segment begins - otherwise
-                // the property would sit at its scene value and pop when the tween starts.
-                // With StartFromCurrent there is no knowable pre-roll value.
-                if (PreExtrapolation == PreExtrapolationMode.Hold && Start.Mode == EasedStartMode.StartFromAbsolute)
+                // Hold the start value until this segment begins - otherwise the property would
+                // sit at its scene value and pop when the tween starts. StartFromCurrent has no
+                // knowable pre-roll; StartFromRelative does (initial + offset).
+                if (PreExtrapolation == PreExtrapolationMode.Hold)
                 {
-                    value = Start.Value;
-                    return true;
+                    switch (Start.Mode)
+                    {
+                        case EasedStartMode.StartFromAbsolute:
+                            value = Start.Value;
+                            return true;
+                        case EasedStartMode.StartFromRelative when _hasInitialValue:
+                            value = ValueContainer.Add(_initialValue, Start.Value);
+                            return true;
+                    }
                 }
 
                 value = default;
@@ -104,6 +118,10 @@ namespace TimboJimbo.Sequencer.Segments
                         case EasedStartMode.StartFromCurrent:
                             var readSuccess = BindingCollection.TryRead(Property, out var readValue);
                             _startValue = readSuccess ? readValue : Start.Value;
+                            break;
+                        case EasedStartMode.StartFromRelative:
+                            // Relative to the value captured at setup, not the (possibly pre-extrapolated) current one.
+                            _startValue = _hasInitialValue ? ValueContainer.Add(_initialValue, Start.Value) : Start.Value;
                             break;
                     }
 
@@ -158,6 +176,7 @@ namespace TimboJimbo.Sequencer.Segments
     public static class TweenStart
     {
         public static TweenStart<T> Absolute<T>(T from) => new TweenStart<T> { Value = from, Mode = EasedStartMode.StartFromAbsolute };
+        public static TweenStart<T> Relative<T>(T offset) => new TweenStart<T> { Value = offset, Mode = EasedStartMode.StartFromRelative };
         public static TweenStart<Vector2> Absolute(float x, float y) => new TweenStart<Vector2> { Value = new Vector2(x, y), Mode = EasedStartMode.StartFromAbsolute };
         public static TweenStart<Vector3> Absolute(float x, float y, float z) => new TweenStart<Vector3> { Value = new Vector3(x, y, z), Mode = EasedStartMode.StartFromAbsolute };
         public static TweenStart<T> Current<T>() => new TweenStart<T> { Value = default, Mode = EasedStartMode.StartFromCurrent };

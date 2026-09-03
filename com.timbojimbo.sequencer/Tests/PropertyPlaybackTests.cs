@@ -65,6 +65,25 @@ namespace TimboJimboTests.Sequencer
         }
 
         [Test]
+        public void RelativeStart_WithEndAtInitial_SlidesInFromOffsetAndHoldsPreRoll()
+        {
+            _target.transform.localPosition = Vector3.right * 10f;
+            var tween = CreateTween(TweenStart.Relative(Vector3.right * 4f), TweenEnd.Initial<Vector3>());
+            tween.StartTime = 1f;
+            var player = CreatePlayer(tween);
+
+            AssertPositionX(14f);
+            player.Play();
+            player.Tick(2f);
+            AssertPositionX(12f);
+            player.Tick(1f);
+            AssertPositionX(10f);
+
+            player.Play();
+            AssertPositionX(14f);
+        }
+
+        [Test]
         public void EndAtInitial_WithAbsoluteHeldStart_UsesSceneInitialAsEnd()
         {
             _target.transform.localPosition = Vector3.right * 3f;

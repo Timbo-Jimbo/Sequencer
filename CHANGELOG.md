@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [0.8.3] - 03/09/2026
+
+### Added
+
+- `TweenStart.Relative(offset)` / `EasedStartMode.StartFromRelative`: start at the property's resting value plus an offset. With `TweenEnd.Initial` this is the slide/scale-in idiom; pre-extrapolation `Hold` works for it
+
+### Fixed
+
+- `PropertyTweener` re-captures its start/end values on every setup pass; previously a replayed tween (loop, `Play()` again, backward seek) kept the values from its first run
+
 ## [0.8.2] - 03/09/2026
 
 ### Added

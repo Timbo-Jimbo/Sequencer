@@ -164,6 +164,24 @@ Seq.Schedule.CustomArrangement(ctx => ctx.Index * 0.2f, tweenA, tweenB, tweenC)
 
 These all return a `Segment` that can be added to any `Sequence.Segments` list or nested further.
 
+### Tween start and end modes
+
+`Seq.Make.Tween(target, descriptor, start, end, duration)` works for any `PropertyDescriptor<TTarget, TValue>` (built-in `TransformProperties`, `CanvasGroupProperties`, `GraphicProperties`, ... or your own). `start` and `end` are typed and describe *how* the endpoints are resolved:
+
+| Start | Meaning |
+|---|---|
+| `TweenStart.Absolute(v)` | Start at `v`. Pre-extrapolation can hold `v` before the segment begins. |
+| `TweenStart.Current<T>()` | Start at whatever the property holds when the segment is entered. |
+| `TweenStart.Relative(offset)` | Start at the property's resting value plus `offset`. Pre-extrapolation can hold that. |
+
+| End | Meaning |
+|---|---|
+| `TweenEnd.Absolute(v)` | End at `v`. |
+| `TweenEnd.Relative(offset)` | End at start plus `offset`. |
+| `TweenEnd.Initial<T>()` | End at the property's value when the player was created (its resting value). |
+
+The slide-in idiom is `TweenStart.Relative(offset)` + `TweenEnd.Initial<T>()`: the element rests wherever it is laid out and animates in from an offset. Because `Initial` and `Relative` capture at **player creation**, make sure layout has settled first (e.g. `LayoutRebuilder.ForceRebuildLayoutImmediate`) when the target is positioned by a UGUI layout group.
+
 ## Composed Example (`Seq.Schedule` + `Seq.Make`)
 
 ```csharp

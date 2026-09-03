@@ -70,15 +70,15 @@ namespace TimboJimboTests.Sequencer
         public void ValidateSequence_ReportsInvalidTiming(float start, float duration)
         {
             var segment = new ValidationTimingSegment { StartTime = start, Duration = duration };
-            _provider.UpsertSequence("Invalid timing", new[] { segment });
+            var owned = _provider.UpsertSequence("Invalid timing", new[] { segment }).Segments[0];
 
             var report = _provider.ValidateSequence("Invalid timing");
             var timingIssues = report.Issues
                 .Where(issue => issue.Code == SequenceValidationCode.InvalidTiming)
                 .ToArray();
-            var issue = timingIssues.Single(candidate => candidate.Segment == segment);
+            var issue = timingIssues.Single(candidate => candidate.Segment == owned);
 
-            Assert.That(issue.Segment, Is.SameAs(segment));
+            Assert.That(issue.Segment, Is.SameAs(owned));
             Assert.That(issue.SequenceName, Is.EqualTo("Invalid timing"));
             Assert.That(timingIssues.All(candidate => candidate.Segment != null), Is.True);
         }
@@ -87,11 +87,11 @@ namespace TimboJimboTests.Sequencer
         public void ValidateSequence_ReportsInvalidProperty()
         {
             var setter = new PropertySetter { Property = BindableProperty.Invalid };
-            _provider.UpsertSequence("Invalid property", new Segment[] { setter });
+            var owned = _provider.UpsertSequence("Invalid property", new Segment[] { setter }).Segments[0];
 
             var issue = SingleIssue(_provider.ValidateSequence("Invalid property"), SequenceValidationCode.InvalidProperty);
 
-            Assert.That(issue.Segment, Is.SameAs(setter));
+            Assert.That(issue.Segment, Is.SameAs(owned));
             Assert.That(issue.Property.IsValid, Is.False);
         }
 
@@ -125,11 +125,11 @@ namespace TimboJimboTests.Sequencer
         public void ValidateSequence_ReportsMissingIncludedProvider()
         {
             var include = new InsertSequenceProvider { SequenceName = "Missing" };
-            _provider.UpsertSequence("Root", new Segment[] { include });
+            var owned = _provider.UpsertSequence("Root", new Segment[] { include }).Segments[0];
 
             var issue = SingleIssue(_provider.ValidateSequence("Root"), SequenceValidationCode.MissingIncludedProvider);
 
-            Assert.That(issue.Segment, Is.SameAs(include));
+            Assert.That(issue.Segment, Is.SameAs(owned));
             Assert.That(issue.SequenceName, Is.EqualTo("Root"));
         }
 
@@ -142,11 +142,11 @@ namespace TimboJimboTests.Sequencer
                 Provider = includedProvider,
                 SequenceName = "Missing"
             };
-            _provider.UpsertSequence("Root", new Segment[] { include });
+            var owned = _provider.UpsertSequence("Root", new Segment[] { include }).Segments[0];
 
             var issue = SingleIssue(_provider.ValidateSequence("Root"), SequenceValidationCode.MissingIncludedSequence);
 
-            Assert.That(issue.Segment, Is.SameAs(include));
+            Assert.That(issue.Segment, Is.SameAs(owned));
             StringAssert.Contains("Missing", issue.Message);
         }
 

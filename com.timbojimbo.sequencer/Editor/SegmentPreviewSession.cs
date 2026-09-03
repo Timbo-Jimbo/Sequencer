@@ -15,6 +15,10 @@ namespace TimboJimboEditor.Sequencer
         public bool IsDisposed { get; private set; }
         public PlaybackRange PlaybackRange { get; private set; }
 
+        /// <summary>Set when the last <see cref="Rebuild"/> could not compile the sequence; null when <see cref="Instance"/> is live.</summary>
+        public string BuildError { get; private set; }
+        public bool CanPreview => Instance != null;
+
         public event Action Rebuilt;
         public event Action Disposed;
 
@@ -48,11 +52,37 @@ namespace TimboJimboEditor.Sequencer
             if (Provider == null)
                 return;
 
-            Instance = Provider.CreatePlayer(SequenceName, PlaybackRange, isPreview: true);
-            Time = Mathf.Clamp(preservedTime, 0f, Duration);
-            Instance.Seek(Time);
+            try
+            {
+                Instance = Provider.CreatePlayer(SequenceName, PlaybackRange, isPreview: true);
+                BuildError = null;
+                Time = Mathf.Clamp(preservedTime, 0f, Duration);
+                Instance.Seek(Time);
+            }
+            catch (Exception exception)
+            {
+                Instance = null;
+                BuildError = DescribeBuildFailure(exception);
+            }
+
             Rebuilt?.Invoke();
             SceneView.RepaintAll();
+        }
+
+        private string DescribeBuildFailure(Exception exception)
+        {
+            var report = Provider.ValidateSequence(SequenceName);
+            if (report.IsValid)
+                return exception.Message;
+
+            var lines = new System.Text.StringBuilder(exception.Message);
+            int shown = 0;
+            foreach (var issue in report.Issues)
+            {
+                if (shown++ == 3) { lines.Append("\n…"); break; }
+                lines.Append('\n').Append(issue.Message);
+            }
+            return lines.ToString();
         }
 
         public void SetPlaybackRange(PlaybackRange playbackRange)

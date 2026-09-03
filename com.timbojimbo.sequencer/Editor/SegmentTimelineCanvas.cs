@@ -2684,7 +2684,7 @@ namespace TimboJimboEditor.Sequencer
             UpdateDropDraftPreview(draftSegment, time);
 
             DragAndDrop.AcceptDrag();
-            DropSegmentRequested?.Invoke(CloneSegment(_dragDropDraftSegment));
+            DropSegmentRequested?.Invoke(SegmentCloner.Clone(_dragDropDraftSegment));
             ClearDropDraftPreview();
             evt.StopPropagation();
         }
@@ -2829,14 +2829,6 @@ namespace TimboJimboEditor.Sequencer
 
             if (hadDraft)
                 RefreshLayout();
-        }
-
-        private static Segment CloneSegment(Segment source)
-        {
-            if (source == null)
-                return null;
-
-            return JsonUtility.FromJson(JsonUtility.ToJson(source), source.GetType()) as Segment;
         }
 
         private bool IsAllDisplayedModelsSelected()

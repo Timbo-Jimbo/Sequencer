@@ -59,7 +59,7 @@ namespace TimboJimboEditor.Sequencer
         public void Bind(SequenceProvider sourceProvider, string sequenceName, Segment segment, int index)
         {
             Handle = new SegmentHandle(sourceProvider, sequenceName, index);
-            Segment = JsonUtility.FromJson(JsonUtility.ToJson(segment), segment.GetType()) as Segment;
+            Segment = SegmentCloner.Clone(segment);
             ResolveTimingFromPlan();
             RefreshDisplayName();
         }

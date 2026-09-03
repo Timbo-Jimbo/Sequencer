@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using TimboJimbo.PropertyBindings;
 using TimboJimbo.Sequencer.Segments;
 using UnityEngine;
@@ -100,11 +101,16 @@ namespace TimboJimbo.Sequencer
             return sequence;
         }
 
-        /// <summary>Creates or exactly replaces the contents of a named sequence.</summary>
+        /// <summary>
+        /// Creates or exactly replaces the contents of a named sequence. The provider owns its
+        /// graph: supplied segments are deep-cloned, so callers keep no live reference into the
+        /// provider and non-serializable state (delegates, code-added listeners) is not retained.
+        /// </summary>
         public Sequence UpsertSequence(string sequenceName, IEnumerable<Segment> segments)
         {
+            if (segments == null) throw new ArgumentNullException(nameof(segments));
             var sequence = GetOrCreateSequence(sequenceName);
-            sequence.ReplaceSegments(segments);
+            sequence.ReplaceSegments(segments.Select(SegmentCloner.Clone));
             return sequence;
         }
 

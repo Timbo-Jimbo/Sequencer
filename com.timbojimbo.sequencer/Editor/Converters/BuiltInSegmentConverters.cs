@@ -187,7 +187,7 @@ namespace TimboJimboEditor.Sequencer.Converters
 
             foreach (var segment in segments)
             {
-                var clone = ConverterUtility.CloneSegment(segment);
+                var clone = SegmentCloner.Clone(segment);
                 if (clone == null)
                     continue;
 
@@ -231,7 +231,7 @@ namespace TimboJimboEditor.Sequencer.Converters
                     if (childPlan?.Segment == null)
                         continue;
 
-                    var clone = ConverterUtility.CloneSegment(childPlan.Segment);
+                    var clone = SegmentCloner.Clone(childPlan.Segment);
                     if (clone == null)
                         continue;
 
@@ -243,17 +243,6 @@ namespace TimboJimboEditor.Sequencer.Converters
             }
             
             return result;
-        }
-    }
-
-    internal static class ConverterUtility
-    {
-        public static Segment CloneSegment(Segment source)
-        {
-            if (source == null)
-                return null;
-
-            return JsonUtility.FromJson(JsonUtility.ToJson(source), source.GetType()) as Segment;
         }
     }
 }

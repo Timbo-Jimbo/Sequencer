@@ -218,6 +218,22 @@ namespace TimboJimboTests.Sequencer
         }
 
         [Test]
+        public void GenericFactories_TweenNonTransformDescriptorEndToEnd()
+        {
+            var group = _target.AddComponent<CanvasGroup>();
+            group.alpha = 1f;
+            var tween = Seq.Make.Tween(group, CanvasGroupProperties.Alpha,
+                TweenStart.Absolute(0f), TweenEnd.Absolute(1f), 2f);
+            var player = CreatePlayer(tween);
+
+            player.Play();
+            player.Tick(1f);
+
+            Assert.That(group.alpha, Is.EqualTo(0.5f).Within(0.0001f));
+            Assert.That(Seq.Make.Set(group, CanvasGroupProperties.Alpha, 0.25f).Value.FloatValue, Is.EqualTo(0.25f));
+        }
+
+        [Test]
         public void DescriptorBackedTransformProperty_SelectsSpecializedBinding()
         {
             var setter = Seq.Make.SetPosition(_target.transform, Vector3.one);

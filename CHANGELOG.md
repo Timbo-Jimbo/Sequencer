@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [0.8.2] - 03/09/2026
+
+### Added
+
+- `Seq.Make.Tween/Set/Punch/Shake(target, descriptor, ...)` generic factories over any `PropertyDescriptor<TTarget, TValue>`; typed value parameters make kind mismatches a compile error. Transform helpers are now wrappers over these
+- Preview compilation failures are now shown in the timeline window instead of aborting the refresh
+
+### Changed
+
+- Updated `com.timbojimbo.propertybindings` dependency to `0.8.2`
+- `SequenceProvider.UpsertSequence` deep-clones supplied segments; the provider owns its graph and callers keep no live reference into it
+- Timeline add, delete, paste, and convert each produce one Undo record and one refresh; convert no longer deletes, appends one at a time, and collapses Undo afterward
+- Segment cloning is centralized in one runtime utility shared by the editor
+
 ## [0.8.1] - 02/09/2026
 
 ### Added

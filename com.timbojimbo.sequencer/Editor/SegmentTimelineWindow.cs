@@ -36,6 +36,7 @@ namespace TimboJimboEditor.Sequencer
         private Label _previewIndicator;
         private VisualElement _canvasBorderOverlay;
         private VisualElement _emptyStateContainer;
+        private HelpBox _previewErrorBox;
 
         private SerializedObject _serializedProvider;
         private bool _isSyncingSelection;
@@ -344,6 +345,12 @@ namespace TimboJimboEditor.Sequencer
             });
             _emptyStateContainer.Add(new Button(FocusProviderInspector) { text = "Manage Sequences in Provider Inspector" });
             rootVisualElement.Add(_emptyStateContainer);
+
+            _previewErrorBox = new HelpBox(string.Empty, HelpBoxMessageType.Error)
+            {
+                style = { position = Position.Absolute, left = 16f, right = 16f, top = 56f, display = DisplayStyle.None }
+            };
+            rootVisualElement.Add(_previewErrorBox);
 
             _canvasBorderOverlay = new VisualElement
             {
@@ -711,6 +718,7 @@ namespace TimboJimboEditor.Sequencer
             EnsurePlaybackRange();
             _canvas.SetTime(DisplayTime);
             PushPlaybackRangeToCanvas();
+            UpdatePreviewVisuals();
             Repaint();
         }
 
@@ -913,6 +921,13 @@ namespace TimboJimboEditor.Sequencer
         {
             bool previewing = IsPreviewing;
             bool recording = IsRecording;
+
+            if (_previewErrorBox != null)
+            {
+                string error = _previewSession?.BuildError;
+                _previewErrorBox.text = error != null ? $"Preview could not compile this sequence.\n{error}" : string.Empty;
+                _previewErrorBox.style.display = error != null ? DisplayStyle.Flex : DisplayStyle.None;
+            }
 
             if (_previewIndicator != null)
                 _previewIndicator.style.display = (previewing && !recording) ? DisplayStyle.Flex : DisplayStyle.None;

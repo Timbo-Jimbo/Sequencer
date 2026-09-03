@@ -184,88 +184,19 @@ namespace TimboJimbo.Sequencer.Segments
 
     public static class PropertyTweenerExtensions
     {
-        public static PropertyTweener TweenPosition(
-            this SeqMake _,
-            Transform target, 
-            TweenStart<Vector3> start,
-            TweenEnd<Vector3> end,
-            float duration, 
-            EaseType ease = EaseType.Linear,
-            VectorInterpolationMode interpolationMode = VectorInterpolationMode.Lerp 
-        )
-        {
-            return new PropertyTweener
-            {
-                Property = BindableProperty.Create(target, TransformProperties.LocalPosition),
-                Start = new TweenStart<ValueContainer> { Value = ValueContainer.From(start.Value), Mode = start.Mode },
-                End = new TweenEnd<ValueContainer> { Value = ValueContainer.From(end.Value), Mode = end.Mode },
-                Duration = duration,
-                Ease = ease,
-                Interpolation = new InterpolationConfig { Vector3 = interpolationMode }
-            };
-        }
+        public static PropertyTweener TweenPosition(this SeqMake make, Transform target, TweenStart<Vector3> start, TweenEnd<Vector3> end, float duration, EaseType ease = EaseType.Linear, VectorInterpolationMode interpolationMode = VectorInterpolationMode.Lerp)
+            => make.Tween(target, TransformProperties.LocalPosition, start, end, duration, ease, new InterpolationConfig { Vector3 = interpolationMode });
 
-        public static PropertyTweener TweenScale(
-            this SeqMake _,
-            Transform target, 
-            TweenStart<Vector3> start,
-            TweenEnd<Vector3> end,
-            float duration, 
-            EaseType ease = EaseType.Linear,
-            VectorInterpolationMode interpolationMode = VectorInterpolationMode.Lerp 
-        )
-        {
-            return new PropertyTweener
-            {
-                Property = BindableProperty.Create(target, TransformProperties.LocalScale),
-                Start = new TweenStart<ValueContainer> { Value = ValueContainer.From(start.Value), Mode = start.Mode },
-                End = new TweenEnd<ValueContainer> { Value = ValueContainer.From(end.Value), Mode = end.Mode },
-                Duration = duration,
-                Ease = ease,
-                Interpolation = new InterpolationConfig { Vector3 = interpolationMode }
-            };
-        }
+        public static PropertyTweener TweenScale(this SeqMake make, Transform target, TweenStart<Vector3> start, TweenEnd<Vector3> end, float duration, EaseType ease = EaseType.Linear, VectorInterpolationMode interpolationMode = VectorInterpolationMode.Lerp)
+            => make.Tween(target, TransformProperties.LocalScale, start, end, duration, ease, new InterpolationConfig { Vector3 = interpolationMode });
 
-        public static PropertyTweener TweenRotation(
-            this SeqMake _,
-            Transform target, 
-            TweenStart<Quaternion> start,
-            TweenEnd<Quaternion> end,
-            float duration, 
-            EaseType ease = EaseType.Linear,
-            RotationInterpolationMode interpolationMode = RotationInterpolationMode.QuaternionSlerp
-        )
-        {
-            return new PropertyTweener
-            {
-                Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
-                Start = new TweenStart<ValueContainer> { Value = ValueContainer.From(start.Value), Mode = start.Mode },
-                End = new TweenEnd<ValueContainer> { Value = ValueContainer.From(end.Value), Mode = end.Mode },
-                Duration = duration,
-                Ease = ease,
-                Interpolation = new InterpolationConfig { Rotation = interpolationMode }
-            };
-        }
+        public static PropertyTweener TweenRotation(this SeqMake make, Transform target, TweenStart<Quaternion> start, TweenEnd<Quaternion> end, float duration, EaseType ease = EaseType.Linear, RotationInterpolationMode interpolationMode = RotationInterpolationMode.QuaternionSlerp)
+            => make.Tween(target, TransformProperties.LocalRotation, start, end, duration, ease, new InterpolationConfig { Rotation = interpolationMode });
 
-        public static PropertyTweener TweenEulerRotation(
-            this SeqMake _,
-            Transform target, 
-            TweenStart<Vector3> start,
-            TweenEnd<Vector3> end,
-            float duration, 
-            EaseType ease = EaseType.Linear,
-            RotationInterpolationMode interpolationMode = RotationInterpolationMode.EulerLerp
-        )
-        {
-            return new PropertyTweener
-            {
-                Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
-                Start = new TweenStart<ValueContainer> { Value = ValueContainer.From(Quaternion.Euler(start.Value)), Mode = start.Mode },
-                End = new TweenEnd<ValueContainer> { Value = ValueContainer.From(Quaternion.Euler(end.Value)), Mode = end.Mode },
-                Duration = duration,
-                Ease = ease,
-                Interpolation = new InterpolationConfig { Rotation = interpolationMode }
-            };
-        }
+        public static PropertyTweener TweenEulerRotation(this SeqMake make, Transform target, TweenStart<Vector3> start, TweenEnd<Vector3> end, float duration, EaseType ease = EaseType.Linear, RotationInterpolationMode interpolationMode = RotationInterpolationMode.EulerLerp)
+            => make.Tween(target, TransformProperties.LocalRotation,
+                new TweenStart<Quaternion> { Value = Quaternion.Euler(start.Value), Mode = start.Mode },
+                new TweenEnd<Quaternion> { Value = Quaternion.Euler(end.Value), Mode = end.Mode },
+                duration, ease, new InterpolationConfig { Rotation = interpolationMode });
     }
 }

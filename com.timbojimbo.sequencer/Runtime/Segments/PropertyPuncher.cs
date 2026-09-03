@@ -64,64 +64,13 @@ namespace TimboJimbo.Sequencer.Segments
 
 	public static class PropertyPuncherExtensions
 	{
-		public static PropertyPuncher PunchPosition(
-			this SeqMake _,
-			Transform target,
-			Vector3 strength,
-			float duration,
-			int vibrato = 10,
-			float elasticity = 1f
-		)
-		{
-			return new PropertyPuncher
-			{
-				Property = BindableProperty.Create(target, TransformProperties.LocalPosition),
-				Strength = ValueContainer.From(strength),
-				Duration = duration,
-				Vibrato = vibrato,
-				Elasticity = elasticity,
-				Additive = true
-			};
-		}
+		public static PropertyPuncher PunchPosition(this SeqMake make, Transform target, Vector3 strength, float duration, int vibrato = 10, float elasticity = 1f)
+			=> make.Punch(target, TransformProperties.LocalPosition, strength, duration, vibrato, elasticity);
 
-		public static PropertyPuncher PunchScale(
-			this SeqMake _,
-			Transform target,
-			Vector3 strength,
-			float duration,
-			int vibrato = 10,
-			float elasticity = 1f
-		)
-		{
-			return new PropertyPuncher
-			{
-				Property = BindableProperty.Create(target, TransformProperties.LocalScale),
-				Strength = ValueContainer.From(strength),
-				Duration = duration,
-				Vibrato = vibrato,
-				Elasticity = elasticity,
-				Additive = true
-			};
-		}
+		public static PropertyPuncher PunchScale(this SeqMake make, Transform target, Vector3 strength, float duration, int vibrato = 10, float elasticity = 1f)
+			=> make.Punch(target, TransformProperties.LocalScale, strength, duration, vibrato, elasticity);
 
-		public static PropertyPuncher PunchRotation(
-			this SeqMake _,
-			Transform target,
-			Vector3 strength,
-			float duration,
-			int vibrato = 10,
-			float elasticity = 1f
-		)
-		{
-			return new PropertyPuncher
-			{
-				Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
-				Strength = ValueContainer.From(Quaternion.Euler(strength)),
-				Duration = duration,
-				Vibrato = vibrato,
-				Elasticity = elasticity,
-				Additive = true
-			};
-		}
+		public static PropertyPuncher PunchRotation(this SeqMake make, Transform target, Vector3 strength, float duration, int vibrato = 10, float elasticity = 1f)
+			=> make.Punch(target, TransformProperties.LocalRotation, Quaternion.Euler(strength), duration, vibrato, elasticity);
 	}
 }

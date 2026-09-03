@@ -197,15 +197,8 @@ namespace TimboJimboEditor.Sequencer
                     if (index < 0 || index >= segments.Count)
                         continue;
 
-                    var existing = segments[index];
-                    if (existing != null && existing.GetType() == model.Segment.GetType())
-                    {
-                        JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(model.Segment), existing);
-                    }
-                    else
-                    {
-                        segments[index] = CloneSegment(model.Segment);
-                    }
+                    if (!SegmentCloner.TryCopyInto(model.Segment, segments[index]))
+                        segments[index] = SegmentCloner.Clone(model.Segment);
 
                     changesApplied = true;
                 }
@@ -225,14 +218,6 @@ namespace TimboJimboEditor.Sequencer
                 if (window != null && uniqueProviders.Contains(window.Provider))
                     window.RefreshPlan();
             }
-        }
-
-        private static Segment CloneSegment(Segment source)
-        {
-            if (source == null)
-                return null;
-
-            return JsonUtility.FromJson(JsonUtility.ToJson(source), source.GetType()) as Segment;
         }
 
         public void UpdateProxyTimings(IReadOnlyList<(SegmentSelectionModel model, float startTime, float duration)> timingChanges)
@@ -352,13 +337,7 @@ namespace TimboJimboEditor.Sequencer
             if (created is IStartTimeConfigurable timeConfig)
                 timeConfig.SetStartTime(Mathf.Max(0f, time));
 
-            Undo.RecordObject(Provider, $"Add {type.Name}");
-            ActiveSequence.Segments.Add(created);
-
-            EditorUtility.SetDirty(Provider);
-            PrefabUtility.RecordPrefabInstancePropertyModifications(Provider);
-
-            Refresh();
+            Commit($"Add {type.Name}", () => ActiveSequence.Segments.Add(created));
         }
 
         public void AddSegment(Segment segment)
@@ -366,17 +345,11 @@ namespace TimboJimboEditor.Sequencer
             if (Provider == null || ActiveSequence == null || segment == null)
                 return;
 
-            var cloned = CloneSegment(segment);
+            var cloned = SegmentCloner.Clone(segment);
             if (cloned == null)
                 return;
 
-            Undo.RecordObject(Provider, $"Add {cloned.GetType().Name}");
-            ActiveSequence.Segments.Add(cloned);
-
-            EditorUtility.SetDirty(Provider);
-            PrefabUtility.RecordPrefabInstancePropertyModifications(Provider);
-
-            Refresh();
+            Commit($"Add {cloned.GetType().Name}", () => ActiveSequence.Segments.Add(cloned));
         }
 
         public List<Segment> ConvertSegments(IReadOnlyList<SegmentSelectionModel> segmentModels, Converters.SegmentConverter converter)
@@ -412,26 +385,20 @@ namespace TimboJimboEditor.Sequencer
             if (outputSegments == null || outputSegments.Count == 0)
                 return null;
 
-            Undo.IncrementCurrentGroup();
-            Undo.SetCurrentGroupName($"Convert Segments ({converter.MenuName})");
-            int undoGroup = Undo.GetCurrentGroup();
+            var inserted = outputSegments
+                .Where(s => s != null)
+                .Select(SegmentCloner.Clone)
+                .Where(c => c != null)
+                .ToList();
 
-            DeleteSegments(validModels);
+            if (inserted.Count == 0)
+                return null;
 
-            var inserted = new List<Segment>();
-            foreach (var segment in outputSegments)
+            Commit($"Convert Segments ({converter.MenuName})", () =>
             {
-                if (segment == null)
-                    continue;
-
-                AddSegment(segment);
-
-                var segments = ActiveSequence?.Segments;
-                if (segments != null && segments.Count > 0)
-                    inserted.Add(segments[segments.Count - 1]);
-            }
-
-            Undo.CollapseUndoOperations(undoGroup);
+                RemoveSegmentsCore(validModels, "Convert Segments");
+                ActiveSequence.Segments.AddRange(inserted);
+            });
 
             return inserted;
         }
@@ -441,6 +408,12 @@ namespace TimboJimboEditor.Sequencer
             if (Provider == null || ActiveSequence == null || segmentModels == null || segmentModels.Count == 0)
                 return;
 
+            Commit("Delete Segments", () => RemoveSegmentsCore(segmentModels, "Delete Segments"));
+        }
+
+        /// <summary>Removes the models' segments, shifts surviving model handles and destroys the models. Caller owns Undo/dirty/refresh.</summary>
+        private void RemoveSegmentsCore(IReadOnlyList<SegmentSelectionModel> segmentModels, string undoName)
+        {
             List<int> deletedIndices = new List<int>();
             HashSet<Segment> targetsToDelete = new HashSet<Segment>();
             var activeSegments = ActiveSequence.Segments;
@@ -485,13 +458,11 @@ namespace TimboJimboEditor.Sequencer
 
                 if (shift > 0)
                 {
-                    Undo.RecordObject(model, "Delete Segments");
+                    Undo.RecordObject(model, undoName);
                     model.Handle = new SegmentHandle(Provider, SequenceName, oldIndex - shift);
                     model.RefreshDisplayName();
                 }
             }
-
-            Undo.RecordObject(Provider, "Delete Segments");
 
             for (int i = activeSegments.Count - 1; i >= 0; i--)
             {
@@ -504,11 +475,6 @@ namespace TimboJimboEditor.Sequencer
                 if (model != null)
                     Undo.DestroyObjectImmediate(model);
             }
-
-            EditorUtility.SetDirty(Provider);
-            PrefabUtility.RecordPrefabInstancePropertyModifications(Provider);
-
-            Refresh();
         }
 
         public List<Segment> TryPaste(IReadOnlyList<SegmentTimelineWindow.ClipboardEntry> clipboard, float displayTime, bool isPreviewing)
@@ -529,7 +495,6 @@ namespace TimboJimboEditor.Sequencer
                 ? displayTime - clipboardDuration
                 : earliestStart;
 
-            Undo.RecordObject(Provider, "Paste Segments");
             var pasted = new List<Segment>();
 
             for (int i = 0; i < clipboard.Count; i++)
@@ -553,18 +518,23 @@ namespace TimboJimboEditor.Sequencer
                 if (segment is IStartTimeConfigurable timeConfig)
                     timeConfig.SetStartTime(Mathf.Max(0f, newStart));
 
-                ActiveSequence.Segments.Add(segment);
                 pasted.Add(segment);
             }
 
             if (pasted.Count > 0)
-            {
-                EditorUtility.SetDirty(Provider);
-                PrefabUtility.RecordPrefabInstancePropertyModifications(Provider);
-                Refresh();
-            }
+                Commit("Paste Segments", () => ActiveSequence.Segments.AddRange(pasted));
 
             return pasted;
+        }
+
+        /// <summary>Single provider mutation: one Undo record, one dirty/prefab record, one refresh.</summary>
+        private void Commit(string undoName, Action mutate)
+        {
+            Undo.RecordObject(Provider, undoName);
+            mutate();
+            EditorUtility.SetDirty(Provider);
+            PrefabUtility.RecordPrefabInstancePropertyModifications(Provider);
+            Refresh();
         }
 
         public void ClearModels()

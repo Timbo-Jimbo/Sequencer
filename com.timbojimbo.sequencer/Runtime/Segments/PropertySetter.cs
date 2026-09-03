@@ -52,56 +52,16 @@ namespace TimboJimbo.Sequencer.Segments
 
     public static class PropertySetterExtensions
     {
-        public static PropertySetter SetPosition(
-            this SeqMake _,
-            Transform target, 
-            Vector3 position
-        )
-        {
-            return new PropertySetter
-            {
-                Property = BindableProperty.Create(target, TransformProperties.LocalPosition),
-                Value = ValueContainer.From(position)
-            };
-        }
+        public static PropertySetter SetPosition(this SeqMake make, Transform target, Vector3 position)
+            => make.Set(target, TransformProperties.LocalPosition, position);
 
-        public static PropertySetter SetScale(
-            this SeqMake _,
-            Transform target, 
-            Vector3 scale
-        )
-        {
-            return new PropertySetter
-            {
-                Property = BindableProperty.Create(target, TransformProperties.LocalScale),
-                Value = ValueContainer.From(scale)
-            };
-        }
+        public static PropertySetter SetScale(this SeqMake make, Transform target, Vector3 scale)
+            => make.Set(target, TransformProperties.LocalScale, scale);
 
-        public static PropertySetter SetRotation(
-            this SeqMake _,
-            Transform target, 
-            Quaternion rotation
-        )
-        {
-            return new PropertySetter
-            {
-                Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
-                Value = ValueContainer.From(rotation)
-            };
-        }
+        public static PropertySetter SetRotation(this SeqMake make, Transform target, Quaternion rotation)
+            => make.Set(target, TransformProperties.LocalRotation, rotation);
 
-        public static PropertySetter SetEulerRotation(
-            this SeqMake _,
-            Transform target, 
-            Vector3 eulerAngles
-        )
-        {
-            return new PropertySetter
-            {
-                Property = BindableProperty.Create(target, TransformProperties.LocalRotation),
-                Value = ValueContainer.From(Quaternion.Euler(eulerAngles))
-            };
-        }
+        public static PropertySetter SetEulerRotation(this SeqMake make, Transform target, Vector3 eulerAngles)
+            => make.Set(target, TransformProperties.LocalRotation, Quaternion.Euler(eulerAngles));
     }
 }

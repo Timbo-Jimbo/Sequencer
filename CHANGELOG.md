@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [0.8.5] - 15/09/2026
+
+### Changed
+
+- Updated `com.timbojimbo.propertybindings` dependency to `0.8.4`, preventing recording startup failures on unsupported Unity-internal serialized properties
+
 ## [0.8.4] - 15/09/2026
 
 ### Changed

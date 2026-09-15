@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [0.8.4] - 15/09/2026
+
+### Changed
+
+- Updated `com.timbojimbo.propertybindings` dependency to `0.8.3`
+
 ## [0.8.3] - 03/09/2026
 
 ### Added

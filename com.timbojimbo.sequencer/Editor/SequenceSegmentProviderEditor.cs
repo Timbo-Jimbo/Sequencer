@@ -6,6 +6,7 @@ using TimboJimbo.Core.Utility;
 using TimboJimbo.Sequencer;
 using TimboJimbo.Sequencer.Segments;
 using TimboJimboEditor.Sequencer.Blocks;
+using TimboJimboEditor.Core;
 using UnityEditor;
 using UnityEngine;
 
@@ -102,11 +103,11 @@ namespace TimboJimboEditor.Sequencer
 
             provider.Sequences ??= new List<Sequence>();
 
-            SequencesEditorGUI.DrawFoldout(
+            FoldoutGUI.Draw(
                 expanded: SequencesFoldoutExpanded,
                 drawContent: () =>
                 {
-                    EditorGUILayout.LabelField("Sequences", EditorStyles.boldLabel);
+                    FoldoutGUI.Title("Sequences");
                     GUILayout.FlexibleSpace();
 
                     using (new EditorGUI.DisabledScope(Application.isPlaying))

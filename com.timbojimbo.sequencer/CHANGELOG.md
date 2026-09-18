@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [0.8.6] - 18/09/2026
+
+### Changed
+
+- Foldout headers now come from `com.timbojimbo.core` (`FoldoutGUI`), adopting the taller banded look shared with Localization; `SequencesEditorGUI.DrawFoldout` is removed
+- Updated `com.timbojimbo.core` dependency to `0.6.0` (provides `FoldoutGUI`) and `com.timbojimbo.propertybindings` to `0.8.5`
+- `CHANGELOG.md` now ships inside the package folder
+
 ## [0.8.5] - 15/09/2026
 
 ### Changed

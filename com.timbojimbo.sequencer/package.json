@@ -1,21 +1,21 @@
 {
 	"name": "com.timbojimbo.sequencer",
 	"displayName": "Sequencer",
-	"version": "0.8.5",
+	"version": "0.8.6",
 	"unity": "6000.0",
 	"unityRelease": "0f1",
 	"description": "An extensible timeline-based sequencing tool for Unity.",
 	"dependencies": {
-		"com.timbojimbo.core": "0.5.1",
+		"com.timbojimbo.core": "0.6.0",
 		"com.unity.test-framework": "1.6.0",
-		"com.timbojimbo.propertybindings": "0.8.4"
+		"com.timbojimbo.propertybindings": "0.8.5"
 	},
 	"author": {
 		"name": "Timbo Jimbo",
 		"url": "https://timbojimbo.com",
 		"email": "hello@timbojimbo.com"
 	},
-	"changelogUrl": "https://github.com/Timbo-Jimbo/Sequencer/blob/main/CHANGELOG.md",
+	"changelogUrl": "https://github.com/Timbo-Jimbo/Sequencer/blob/main/com.timbojimbo.sequencer/CHANGELOG.md",
 	"documentationUrl": "https://github.com/Timbo-Jimbo/Sequencer#readme",
 	"licensesUrl": "https://github.com/Timbo-Jimbo/Sequencer/blob/main/LICENSE"
 }

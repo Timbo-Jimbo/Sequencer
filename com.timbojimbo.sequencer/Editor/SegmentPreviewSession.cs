@@ -66,6 +66,16 @@ namespace TimboJimboEditor.Sequencer
             }
 
             Rebuilt?.Invoke();
+            FlushAndRepaint();
+        }
+
+        // Applying animated values dirties any driven UGUI graphics (via OnDidApplyAnimationProperties), but
+        // that rebuild is deferred to the next player-loop tick. In edit-mode preview nothing pumps that loop
+        // between scrubs, so the scene view would repaint against the stale mesh until an unrelated editor
+        // interaction runs it. Force the canvas rebuild now so the repaint shows the current frame.
+        private static void FlushAndRepaint()
+        {
+            Canvas.ForceUpdateCanvases();
             SceneView.RepaintAll();
         }
 
@@ -103,7 +113,7 @@ namespace TimboJimboEditor.Sequencer
 
             Time = Mathf.Clamp(time, 0f, Duration);
             Instance.Seek(Time);
-            SceneView.RepaintAll();
+            FlushAndRepaint();
         }
 
         public void SetPlaying(bool playing)
@@ -126,7 +136,7 @@ namespace TimboJimboEditor.Sequencer
 
             Instance.Tick(dt);
             Time = Mathf.Clamp(Instance.Playhead, 0f, Duration);
-            SceneView.RepaintAll();
+            FlushAndRepaint();
         }
 
         public void Dispose()
@@ -137,7 +147,7 @@ namespace TimboJimboEditor.Sequencer
             IsDisposed = true;
             DisposeInstance();
             Disposed?.Invoke();
-            SceneView.RepaintAll();
+            FlushAndRepaint();
         }
 
         private void DisposeInstance()
